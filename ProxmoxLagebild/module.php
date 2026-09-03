@@ -79,11 +79,22 @@ class ProxmoxLagebild extends IPSModule
             if ($z[0] === 'hoch')     { $lage = 1; }
         }
 
-        $tab = array_merge([['Stufe', 'Host', 'Objekt', 'Befund', 'seit']], $zeilen);
-        $this->SetValue('Befunde',      json_encode($tab, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        $this->SetValue('BefundeOffen', count($zeilen));
-        $this->SetValue('Lage',         $lage);
-        $this->SetValue('Knotenvergleich', $this->knotenvergleich($wurzel));
+        $tab  = array_merge([['Stufe', 'Host', 'Objekt', 'Befund', 'seit']], $zeilen);
+        $json = json_encode($tab, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $vgl  = $this->knotenvergleich($wurzel);
+        $this->SetValue('Befunde',         $json);
+        $this->SetValue('BefundeOffen',    count($zeilen));
+        $this->SetValue('Lage',            $lage);
+        $this->SetValue('Knotenvergleich', $vgl);
+
+        // SPIEGELN wie PXV und PXB. Die Seiten binden auf die Variablen unter der WURZEL,
+        // nicht auf die der Instanz - stuenden die Werte nur hier, zeigten die Seiten
+        // stillschweigend den Stand vom Umschalttag. Gemessen waren es 3,3 Stunden, bis
+        // es auffiel, und aufgefallen ist es nur beim Aufraeumen.
+        $this->schreib($wurzel, 'Befunde',         3, '', $json);
+        $this->schreib($wurzel, 'Befunde offen',   1, '', count($zeilen));
+        $this->schreib($wurzel, 'Lage',            1, '', $lage);
+        $this->schreib($wurzel, 'Knotenvergleich', 3, '', $vgl);
 
         if ($this->ReadPropertyBoolean('ArchivPflege')
             && (time() - $this->ReadAttributeInteger('LetzteArchivpflege')) >= self::ARCHIV_TAKT) {
@@ -144,6 +155,23 @@ class ProxmoxLagebild extends IPSModule
                               . implode(', ', array_slice($b['ungefragt'], 0, 10)), KL_WARNING);
         }
         return $b;
+    }
+
+    /** Variable unter $eltern finden oder anlegen und schreiben. */
+    private function schreib(int $eltern, string $name, int $typ, string $profil, $wert): void
+    {
+        $id = 0;
+        foreach (IPS_GetChildrenIDs($eltern) as $c) {
+            if (IPS_VariableExists($c) && IPS_GetName($c) === $name) { $id = $c; break; }
+        }
+        if ($id === 0) {
+            $id = IPS_CreateVariable($typ);
+            IPS_SetName($id, $name);
+            IPS_SetParent($id, $eltern);
+            if ($profil !== '') { @IPS_SetVariableCustomProfile($id, $profil); }
+            px_archiv_anwenden(px_archiv_instanz(), $id, $name, $typ);
+        }
+        @SetValue($id, $wert);
     }
 
     /** Wert einer Variablen unter $eltern, oder null. */
