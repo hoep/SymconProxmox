@@ -80,7 +80,12 @@
   "actions": [
     {
       "type": "Button",
-      "caption": "Jetzt abfragen",
+      "caption": "Jetzt abfragen (alles)",
+      "onClick": "PXV_Vollabfrage($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "Jetzt abfragen (nur schneller Teil)",
       "onClick": "PXV_Abfragen($id);"
     }
   ],

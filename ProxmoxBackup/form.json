@@ -59,7 +59,12 @@
   "actions": [
     {
       "type": "Button",
-      "caption": "Jetzt abfragen",
+      "caption": "Jetzt abfragen (alles)",
+      "onClick": "PXB_Vollabfrage($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "Jetzt abfragen (nur schneller Teil)",
       "onClick": "PXB_Abfragen($id);"
     }
   ],

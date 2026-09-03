@@ -86,6 +86,18 @@ class ProxmoxNode extends IPSModule
         $this->SetStatus(102);
     }
 
+    /**
+     * Alles in einem Lauf, ohne Ruecksicht auf die langsamen Takte. Fuer den ersten
+     * Aufbau, den Knopf im Formular und den Abgleich gegen eine andere Quelle - dort
+     * waere ein 'kommt in fuenf Minuten' als Lücke missdeutet worden.
+     */
+    public function Vollabfrage(): void
+    {
+        $this->WriteAttributeInteger('LetzteDetails', 0);
+        $this->WriteAttributeInteger('LetzteDatentraeger', 0);
+        $this->Abfragen();
+    }
+
     /** Ein Abfragelauf. Oeffentlich, damit der Timer und ein Skript ihn aufrufen koennen. */
     public function Abfragen(): void
     {
@@ -96,6 +108,10 @@ class ProxmoxNode extends IPSModule
             // Ein Knoten im Neustart ist KEIN Fehler. Er wird vermerkt, nicht gemeldet -
             // genau diese Groesse fehlte beim Ausfall ab Februar.
             $this->SetValue('Erreichbar', false);
+            $z = $this->ReadPropertyInteger('Ziel');
+            if ($z > 0 && IPS_ObjectExists($z)) {
+                $this->schreib($z, 'Erreichbar', 0, '~Alert.Reversed', false);
+            }
             $this->SetStatus($r['code'] === 401 ? 201 : 202);
             return;
         }
@@ -114,6 +130,13 @@ class ProxmoxNode extends IPSModule
                 case 'lxc':     $gaeste[]   = $x;  break;
                 case 'storage': $speicher[] = $x;  break;
             }
+        }
+        // Im Spiegelbetrieb muessen diese beiden auch im ZIEL stehen: die Seiten und die
+        // Befundtabelle lesen sie dort. Stuenden sie nur an der Instanz, blieben die
+        // Werte im Baum stehen - genau die Blindheit, die abgestellt werden soll.
+        if ($ziel !== $this->InstanceID) {
+            $this->schreib($ziel, 'Erreichbar',     0, '~Alert.Reversed', true);
+            $this->schreib($ziel, 'Letzte Abfrage', 1, '~UnixTimestamp',  time());
         }
         if ($knoten !== null) { $this->knotenSchreiben($ziel, $knoten); }
         if ($this->ReadPropertyBoolean('Gaeste'))   { $this->gaesteSchreiben($ziel, $gaeste); }
@@ -187,6 +210,27 @@ class ProxmoxNode extends IPSModule
             $this->schreib($ziel, 'I/O Wait',    2, 'Prozent',  round(((float) ($st['wait'] ?? 0)) * 100, 2));
             $this->schreib($ziel, 'Kernel',      3, '',         (string) ($st['kversion']   ?? ''));
             $this->schreib($ziel, 'PVE Version', 3, '',         (string) ($st['pveversion'] ?? ''));
+
+            // Auslagerungsspeicher und Prozessorangaben. DIE NAMEN SIND ABSICHT: genau so
+            // hiessen sie in den alten Knotenskripten, und nur unter demselben Namen wird
+            // die vorhandene Variable samt Historie weiterbenutzt - bei 'SWAP used' sind
+            // das drei Jahre. Der Sammler hat diese Werte nie geschrieben; die Luecke
+            // fiel nur nicht auf, weil die alten Skripte noch nachliefen.
+            $sw = $st['swap'] ?? null;
+            if (is_array($sw)) {
+                $sg = max(1.0, (float) ($sw['total'] ?? 1));
+                $this->schreib($ziel, 'SWAP',      2, 'GB',      round($sg / 1073741824, 2));
+                $this->schreib($ziel, 'SWAP frei', 2, 'GB',      round(((float) ($sw['free'] ?? 0)) / 1073741824, 2));
+                $this->schreib($ziel, 'SWAP used', 2, 'Prozent', round(((float) ($sw['used'] ?? 0)) / $sg * 100, 2));
+            }
+            $ci = $st['cpuinfo'] ?? null;
+            if (is_array($ci)) {
+                $this->schreib($ziel, 'CPU Cores',   1, '', (int) ($ci['cores'] ?? 0));
+                $this->schreib($ziel, 'CPU Threads', 1, '', (int) ($ci['cpus']  ?? 0));
+                // Als Text mit Einheit - so stand es bisher im Baum und so lesen es die Seiten.
+                $this->schreib($ziel, 'CPU MHz',     3, '', ((string) ($ci['mhz'] ?? '')) . ' MHz');
+                $this->schreib($ziel, 'CPU Modell',  3, '', (string) ($ci['model'] ?? ''));
+            }
         }
         // Gefiltert wird ueber die STARTZEIT. Ein Auftrag, der um 02:00 beginnt und um
         // 03:40 scheitert, faengt weit vor jedem kurzen Fenster an - deshalb ein
@@ -261,10 +305,25 @@ class ProxmoxNode extends IPSModule
     {
         $zaehler = ((int) date('i') % self::ZAEHLER_RASTER) === 0;
         $laufen  = 0;
+        // WO EIN GAST LIEGT, entscheidet der Bestand - nicht dieses Modul.
+        // Die alten Skripte haben je Gast eine Dummy-INSTANZ direkt unter dem Host
+        // angelegt. Wer stattdessen stur eine Kategorie unter 'Gäste' anlegt, verdoppelt
+        // den ganzen Bestand und haengt die Archivhistorie ab - gemessen waeren es 646
+        // neue Variablen gewesen. Also: erst nachsehen, ob es den Gast unter dem Host
+        // schon gibt (Instanz ODER Kategorie), und nur sonst unter 'Gäste' neu anlegen.
+        $gkat = 0;
         foreach ($gaeste as $g) {
             $name = trim((string) ($g['name'] ?? ''));
             if ($name === '') { $name = 'vmid ' . ($g['vmid'] ?? '?'); }
-            $ort = $this->kindNachName($ziel, $name);
+            $ort = 0;
+            foreach (IPS_GetChildrenIDs($ziel) as $c) {
+                if (IPS_GetName($c) !== $name) { continue; }
+                if (IPS_InstanceExists($c) || IPS_GetObject($c)['ObjectType'] == 0) { $ort = $c; break; }
+            }
+            if (!$ort) {
+                if (!$gkat) { $gkat = $this->kindNachName($ziel, 'Gäste'); }
+                $ort = $this->kindNachName($gkat, $name);
+            }
             $an  = (($g['status'] ?? '') === 'running');
             if ($an) { $laufen++; }
             $mm = max(1.0, (float) ($g['maxmem']  ?? 1));
@@ -284,6 +343,14 @@ class ProxmoxNode extends IPSModule
                 $this->schreib($ort, 'diskwrite', 1, '', (int) ($g['diskwrite'] ?? 0));
             }
         }
+        // Die vmids, die es JETZT gibt - als Text, damit PXB die Verwaisungspruefung
+        // darauf stuetzen kann. Den Baum abzusuchen genuegt NICHT: die Dummy-Instanz
+        // eines geloeschten Gastes bleibt mit ihrer alten id stehen, und der Gast gilt
+        // dann faelschlich als lebendig. Gemessen: 8 statt 11 verwaiste Gruppen.
+        $vmids = [];
+        foreach ($gaeste as $g) { $v = (int) ($g['vmid'] ?? 0); if ($v > 0) { $vmids[] = $v; } }
+        sort($vmids);
+        $this->schreib($ziel, 'Gäste VMIDs', 3, '', implode(',', $vmids));
         $this->schreib($ziel, 'Gäste gesamt',   1, '', count($gaeste));
         $this->schreib($ziel, 'Gäste laufen',   1, '', $laufen);
         $this->schreib($ziel, 'Gäste gestoppt', 1, '', count($gaeste) - $laufen);
@@ -299,7 +366,11 @@ class ProxmoxNode extends IPSModule
             $mx  = max(1.0, (float) ($s['maxdisk'] ?? 1));
             $this->schreib($ort, 'Belegung', 2, 'Prozent', round(((float) ($s['disk'] ?? 0)) / $mx * 100, 2));
             $this->schreib($ort, 'Frei',     2, 'GB',      round(($mx - (float) ($s['disk'] ?? 0)) / 1073741824, 1));
-            $this->schreib($ort, 'Aktiv',    0, '~Alert.Reversed', ((int) ($s['status'] ?? 0)) === 1);
+            // PVE meldet den Zustand mal als 1, mal als 'available'. Nur auf die Zahl zu
+            // pruefen ergab bei ALLEN Speichern faelschlich 'nicht aktiv' - gemessen im
+            // Vergleich gegen den Sammler.
+            $this->schreib($ort, 'Aktiv',    0, '~Alert.Reversed',
+                           ((int) ($s['status'] ?? 0)) === 1 || ($s['status'] ?? '') === 'available');
         }
     }
 

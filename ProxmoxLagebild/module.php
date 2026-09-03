@@ -197,6 +197,14 @@ class ProxmoxLagebild extends IPSModule
         if (is_numeric($ram) && $ram >= 90) {
             $zeilen[] = ['hoch', $host, 'Arbeitsspeicher', 'Belegung ' . round($ram, 1) . ' %', $this->wann($k, 'RAM used')];
         }
+        // Voller Auslagerungsspeicher ist ein Vorbote, kein Zustand: der Knoten laeuft
+        // noch, wird aber bei der naechsten Anforderung zaeh. Gemessen hatte Majestix
+        // 99,4 Prozent belegt, und niemandem war es aufgefallen.
+        $sw = $this->lies($k, 'SWAP used');
+        if (is_numeric($sw) && $sw >= 80) {
+            $zeilen[] = [$sw >= 95 ? 'hoch' : 'mittel', $host, 'Auslagerungsspeicher',
+                         'Belegung ' . round($sw, 1) . ' %', $this->wann($k, 'SWAP used')];
+        }
         $tf = $this->lies($k, 'Aufgaben mit Fehler 24h');
         if (is_numeric($tf) && $tf > 0) {
             $zeilen[] = ['hoch', $host, 'Aufgaben', $tf . ' fehlgeschlagen in 24 h — '

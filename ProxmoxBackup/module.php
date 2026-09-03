@@ -72,6 +72,13 @@ class ProxmoxBackup extends IPSModule
         $this->SetStatus($an ? 102 : 104);
     }
 
+    /** Alles in einem Lauf, ohne Ruecksicht auf den 15-Minuten-Takt der Gruppenabfrage. */
+    public function Vollabfrage(): void
+    {
+        $this->WriteAttributeInteger('LetzteTiefe', 0);
+        $this->Abfragen();
+    }
+
     public function Abfragen(): void
     {
         $px = $this->zugriff();
@@ -79,6 +86,10 @@ class ProxmoxBackup extends IPSModule
 
         if (!$r['ok']) {
             $this->SetValue('Erreichbar', false);
+            $z = $this->ReadPropertyInteger('Ziel');
+            if ($z > 0 && IPS_ObjectExists($z)) {
+                $this->schreib($z, 'Erreichbar', 0, '~Alert.Reversed', false);
+            }
             // 403 heisst hier fast immer: der Token hat keinen ACL-Eintrag. Das ist der
             // gefaehrlichste Fall, weil PBS dann LEERE Listen liefert statt eines Fehlers -
             // die Ueberwachung meldete 'null Probleme' und waere blind.
@@ -92,8 +103,17 @@ class ProxmoxBackup extends IPSModule
         $ziel = $this->ReadPropertyInteger('Ziel');
         if ($ziel <= 0 || !IPS_ObjectExists($ziel)) { $ziel = $this->InstanceID; }
 
+        if ($ziel !== $this->InstanceID) {
+            $this->schreib($ziel, 'Erreichbar',     0, '~Alert.Reversed', true);
+            $this->schreib($ziel, 'Letzte Abfrage', 1, '~UnixTimestamp',  time());
+        }
         $stores = (array) $r['data'];
         $this->SetValue('Datastores', count($stores));
+        // Auch im Ziel: die Befundtabelle liest die Zahl dort und macht aus einer Null
+        // den Befund 'Token ohne Rechte'.
+        if ($ziel !== $this->InstanceID) {
+            $this->schreib($ziel, 'Datastores', 1, '', count($stores));
+        }
         // Kein einziger Datastore trotz gueltiger Antwort ist der Riegel gegen den
         // blinden Zugang: ein Token ohne Rechte bekommt kein 403, sondern nichts.
         if (count($stores) === 0) { $this->SetStatus(203); }
@@ -121,8 +141,11 @@ class ProxmoxBackup extends IPSModule
             $this->auftraege($px, $ziel);
             $this->schreib($ziel, 'Ältester Gast ohne Sicherung', 2, 'RDays', round($aeltesteStd / 24, 2));
             $this->schreib($ziel, 'Gruppen ohne Sicherung',       1, '',      $ohneSicherung);
-            $this->SetValue('SicherungFrisch',
-                            ($aeltesteStd * 3600) <= $this->ReadPropertyInteger('WarnAlterStunden') * 3600);
+            $frisch = ($aeltesteStd * 3600) <= $this->ReadPropertyInteger('WarnAlterStunden') * 3600;
+            $this->SetValue('SicherungFrisch', $frisch);
+            if ($ziel !== $this->InstanceID) {
+                $this->schreib($ziel, 'Sicherungen frisch', 0, '~Alert.Reversed', $frisch);
+            }
         }
     }
 
@@ -183,13 +206,15 @@ class ProxmoxBackup extends IPSModule
             $ziel = (int) @IPS_GetProperty($iid, 'Ziel');
             if ($ziel <= 0 || !IPS_ObjectExists($ziel)) { $ziel = $iid; }
             if (mb_strtolower(IPS_GetName($ziel)) !== mb_strtolower($knoten)) { continue; }
+            // PXV legt die Liste der vmids ab, die es im letzten Lauf WIRKLICH gab.
+            // Den Baum abzusuchen waere naheliegend und falsch: die Dummy-Instanz eines
+            // geloeschten Gastes bleibt mit ihrer alten id stehen: gemessen 8 statt 11
+            // verwaisten Gruppen, weil drei geloeschte Gaeste als lebendig galten.
             foreach (IPS_GetChildrenIDs($ziel) as $c) {
-                if (IPS_GetObject($c)['ObjectType'] != 0) { continue; }
-                foreach (IPS_GetChildrenIDs($c) as $v) {
-                    if (IPS_VariableExists($v) && IPS_GetName($v) === 'id') {
-                        $n = (int) GetValue($v);
-                        if ($n > 0) { $ids[$n] = true; }
-                    }
+                if (!IPS_VariableExists($c) || IPS_GetName($c) !== 'Gäste VMIDs') { continue; }
+                foreach (explode(',', (string) GetValue($c)) as $st) {
+                    $n = (int) trim($st);
+                    if ($n > 0) { $ids[$n] = true; }
                 }
             }
         }
