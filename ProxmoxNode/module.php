@@ -242,9 +242,10 @@ class ProxmoxNode extends IPSModule
             }
             $ci = $st['cpuinfo'] ?? null;
             if (is_array($ci)) {
-                // NICHT 'CPU Cores' - der Name kommt aus den Altskripten, und knotenSchreiben()
-                // fuehrt denselben Wert schon als 'CPU Kerne'. Beide zu schreiben hiesse,
-                // dieselbe Zahl zweimal im Baum zu fuehren.
+                // cores und cpus sind NICHT dasselbe: 14 Kerne, 20 Threads bei einem
+                // i9-13900H. 'CPU Cores' haengt an der TileVisu-Seite (vier Links) und
+                // muss deshalb unter genau diesem Namen weitergeschrieben werden.
+                $this->schreib($ziel, 'CPU Cores',   1, '', (int) ($ci['cores'] ?? 0));
                 $this->schreib($ziel, 'CPU Threads', 1, '', (int) ($ci['cpus']  ?? 0));
                 // Als Text mit Einheit - so stand es bisher im Baum und so lesen es die Seiten.
                 $this->schreib($ziel, 'CPU MHz',     3, '', ((string) ($ci['mhz'] ?? '')) . ' MHz');
@@ -316,7 +317,10 @@ class ProxmoxNode extends IPSModule
         $this->schreib($ziel, 'RAM frei',   2, 'GB',      round(($maxmem - (float) ($n['mem'] ?? 0)) / 1073741824, 2));
         $this->schreib($ziel, 'HDD',        2, 'GB',      round($maxdsk / 1073741824, 2));
         $this->schreib($ziel, 'HDD frei',   2, 'GB',      round(($maxdsk - (float) ($n['disk'] ?? 0)) / 1073741824, 2));
-        $this->schreib($ziel, 'CPU Kerne',  1, '',        (int) ($n['maxcpu'] ?? 0));
+        // KEIN 'CPU Kerne': der Wert war maxcpu, also die Zahl der THREADS unter einem
+        // Namen, der Kerne verspricht - gemessen 20 statt 14 bei einem i9-13900H. Die
+        // echten Kerne stehen als 'CPU Cores' in knotenDetails(), und genau die zeigt
+        // die TileVisu-Seite an. Doppelt gefuehrt war nicht die Zahl, sondern der Irrtum.
         $this->schreib($ziel, 'uptime',     2, 'RDays',   round(((float) ($n['uptime'] ?? 0)) / 86400, 2));
     }
 
@@ -356,6 +360,12 @@ class ProxmoxNode extends IPSModule
             $this->schreib($ort, 'RAM GB',     2, 'GB',       round(((float) ($g['mem'] ?? 0)) / 1073741824, 2));
             $this->schreib($ort, 'RAM max GB', 2, 'GB',       round($mm / 1073741824, 2));
             $this->schreib($ort, 'disk%',      2, 'Prozent',  round(((float) ($g['disk'] ?? 0)) / $md * 100, 2));
+            // Absolutwerte. Sie standen in den Altskripten und fehlten hier - nach dem
+            // Abschalten waeren 296 Variablen eingefroren gewesen, ohne dass etwas
+            // ausgefallen waere. Dieselbe Falle wie bei 'speed in'/'speed out'.
+            $this->schreib($ort, 'disk',       1, '',         (int) ($g['disk']    ?? 0));
+            $this->schreib($ort, 'maxdisk',    1, '',         (int) ($g['maxdisk'] ?? 0));
+            $this->schreib($ort, 'cpus',       1, '',         (int) ($g['maxcpu']  ?? 0));
             $this->schreib($ort, 'uptime',     2, 'RDays',    round(((float) ($g['uptime'] ?? 0)) / 86400, 3));
             $this->schreib($ort, 'id',         1, '',         (int) ($g['vmid'] ?? 0));
             // 'speed in'/'speed out' sind ABGELEITET: der Zuwachs des Zaehlers geteilt
@@ -386,6 +396,39 @@ class ProxmoxNode extends IPSModule
         $this->schreib($ziel, 'Gäste laufen',   1, '', $laufen);
         $this->schreib($ziel, 'Gäste gestoppt', 1, '', count($gaeste) - $laufen);
         $this->WriteAttributeString('Zaehlerstand', json_encode($stand));
+        if ($zaehler) { $this->containerSwap($ziel, $gaeste); }
+    }
+
+    /**
+     * Auslagerungsspeicher der CONTAINER. Er steht nicht in /cluster/resources, sondern
+     * nur in der lxc-Liste des Knotens - deshalb ein eigener Aufruf, und nur im groben
+     * Raster. Virtuelle Maschinen haben keinen Wert dafuer; sie werden uebersprungen,
+     * statt eine Null einzutragen, die wie 'kein Auslagerungsspeicher belegt' aussaehe.
+     */
+    private function containerSwap(int $ziel, array $gaeste): void
+    {
+        $px = $this->zugriff();
+        $kname = $this->knotenname($px);
+        if ($kname === '') { return; }
+        $lxc = $px->daten('/nodes/' . rawurlencode($kname) . '/lxc');
+        if (!is_array($lxc)) { return; }
+        $ort = [];
+        foreach ($gaeste as $g) { $ort[(int) ($g['vmid'] ?? 0)] = trim((string) ($g['name'] ?? '')); }
+        foreach ($lxc as $c) {
+            if (!isset($c['swap'], $c['maxswap'])) { continue; }
+            $name = $ort[(int) ($c['vmid'] ?? 0)] ?? trim((string) ($c['name'] ?? ''));
+            if ($name === '') { continue; }
+            $o = 0;
+            foreach (IPS_GetChildrenIDs($ziel) as $x) {
+                if (IPS_GetName($x) !== $name) { continue; }
+                if (IPS_InstanceExists($x) || IPS_GetObject($x)['ObjectType'] == 0) { $o = $x; break; }
+            }
+            if (!$o) { continue; }
+            $mx = max(1.0, (float) $c['maxswap']);
+            $this->schreib($o, 'swap',    1, '',        (int) $c['swap']);
+            $this->schreib($o, 'maxswap', 1, '',        (int) $c['maxswap']);
+            $this->schreib($o, 'swap%',   2, 'Prozent', round(((float) $c['swap']) / $mx * 100, 2));
+        }
     }
 
     /**
