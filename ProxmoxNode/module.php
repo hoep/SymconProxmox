@@ -72,10 +72,14 @@ class ProxmoxNode extends IPSModule
         $this->RegisterVariableBoolean('Erreichbar', 'Erreichbar', '~Alert.Reversed', 1);
         $this->RegisterVariableInteger('LetzteAbfrage', 'Letzte Abfrage', '~UnixTimestamp', 2);
 
+        // Konfiguriert ist die Instanz, wenn ENTWEDER eine Adresse eingetragen ist ODER
+        // ein Name in der Zugangsdatei steht - im zweiten Fall kommt die Adresse von
+        // dort, und ein Abgleich nur gegen 'Adresse' liesse den Timer auf 0 stehen.
         $takt = max(self::TAKT_MIN, $this->ReadPropertyInteger('Takt'));
-        $this->SetTimerInterval('Abfrage', $this->ReadPropertyString('Adresse') === '' ? 0 : $takt * 1000);
+        $bereit = $this->ReadPropertyString('Adresse') !== '' || trim($this->ReadPropertyString('Zugang')) !== '';
+        $this->SetTimerInterval('Abfrage', $bereit ? $takt * 1000 : 0);
 
-        if ($this->ReadPropertyString('Adresse') === '') {
+        if (!$bereit) {
             $this->SetStatus(104);                      // Instanz nicht konfiguriert
             return;
         }

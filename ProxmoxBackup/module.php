@@ -63,8 +63,11 @@ class ProxmoxBackup extends IPSModule
         $this->RegisterVariableInteger('Datastores', 'Datastores', '', 3);
         $this->RegisterVariableBoolean('SicherungFrisch', 'Sicherungen frisch', '~Alert.Reversed', 4);
 
+        // Ein Name in der Zugangsdatei genuegt - Adresse und Token kommen dann von dort.
+        // Ein Abgleich nur gegen die Properties liesse den Timer sonst auf 0 stehen.
         $takt = max(self::TAKT_MIN, $this->ReadPropertyInteger('Takt'));
-        $an   = $this->ReadPropertyString('Adresse') !== '' && $this->ReadPropertyString('Token') !== '';
+        $an   = trim($this->ReadPropertyString('Zugang')) !== ''
+                || ($this->ReadPropertyString('Adresse') !== '' && $this->ReadPropertyString('Token') !== '');
         $this->SetTimerInterval('Abfrage', $an ? $takt * 1000 : 0);
         $this->SetStatus($an ? 102 : 104);
     }
