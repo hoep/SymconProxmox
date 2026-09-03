@@ -59,6 +59,18 @@
     },
     {
       "type": "Label",
+      "caption": "Durchsatz (speed in/out) wird aus dem Zählerzuwachs abgeleitet und hat einen eigenen, feineren Takt als die Zähler selbst — ein Viertelstundenmittel würde kurze Spitzen verschlucken."
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "DurchsatzTakt",
+      "caption": "Durchsatz alle … Sekunden",
+      "minimum": 60,
+      "maximum": 900,
+      "suffix": " s"
+    },
+    {
+      "type": "Label",
       "caption": "Ziel: Objekt, unter dem geschrieben wird. Leer oder 0 = unter dieser Instanz. Auf die bestehende Kategorie zeigen lassen, damit Archivreihen und Verknüpfungen erhalten bleiben."
     },
     {

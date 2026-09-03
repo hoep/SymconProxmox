@@ -25,12 +25,23 @@ require_once __DIR__ . '/../libs/px-archiv.php';
  */
 class ProxmoxNode extends IPSModule
 {
+    /** Setzt Vollabfrage(), damit auch die Rasterbloecke einmal durchlaufen. */
+    private bool $vollstaendig = false;
+
     /** Kuerzeste erlaubte Abfrage. Darunter belastet man den pvedaemon ohne Gewinn:
      *  pvestatd frischt seinen Zwischenspeicher ohnehin nur alle 10 Sekunden auf. */
     private const TAKT_MIN = 30;
 
-    /** Zaehler werden nur im Viertelstundenraster geschrieben - sie aendern sich
-     *  sekuendlich, und ein Minutenwert sagt nicht mehr als ein Viertelstundenwert. */
+    /**
+     * Der ZAEHLER wird nur im Viertelstundenraster geschrieben. Er waechst monoton und
+     * wird als Zaehler aggregiert; fuer den Tagesverbrauch genuegt eine grobe Stuetzstelle,
+     * und im Minutentakt waeren es bei 81 Gaesten rund 466.000 Datensaetze am Tag.
+     *
+     * Fuer den DURCHSATZ gilt das Gegenteil, und diese Unterscheidung fehlte hier zuerst:
+     * eine vierminuetige Sicherungsspitze um 03:00 verschwindet in einem
+     * Viertelstundenmittel spurlos. Er hat deshalb seinen eigenen, feinen Takt
+     * (Eigenschaft DurchsatzTakt, Vorgabe 120 s). Die alten Skripte rechneten alle 15 s.
+     */
     private const ZAEHLER_RASTER = 15;
 
     /** Last, Auftragsfehler, Zertifikat: alle fuenf Minuten. */
@@ -58,6 +69,11 @@ class ProxmoxNode extends IPSModule
         $this->RegisterPropertyInteger('Ziel', 0);
         $this->RegisterPropertyBoolean('Gaeste', true);
         $this->RegisterPropertyBoolean('Speicher', true);
+        // Durchsatz getrennt vom Zaehler takten - siehe zaehlerUndRate().
+        $this->RegisterPropertyInteger('DurchsatzTakt', 120);
+        // Letzter Zaehlerstand je Gast: [vmid => [zeit, netin, netout]]. Er steht bewusst
+        // NICHT in der Zaehlervariablen, damit Durchsatz und Zaehler unabhaengig takten.
+        $this->RegisterAttributeString('Zaehlerstand', '{}');
 
         $this->RegisterAttributeInteger('LetzteDetails', 0);
         $this->RegisterAttributeInteger('LetzteDatentraeger', 0);
@@ -95,7 +111,8 @@ class ProxmoxNode extends IPSModule
     {
         $this->WriteAttributeInteger('LetzteDetails', 0);
         $this->WriteAttributeInteger('LetzteDatentraeger', 0);
-        $this->Abfragen();
+        $this->vollstaendig = true;
+        try { $this->Abfragen(); } finally { $this->vollstaendig = false; }
     }
 
     /** Ein Abfragelauf. Oeffentlich, damit der Timer und ein Skript ihn aufrufen koennen. */
@@ -225,7 +242,9 @@ class ProxmoxNode extends IPSModule
             }
             $ci = $st['cpuinfo'] ?? null;
             if (is_array($ci)) {
-                $this->schreib($ziel, 'CPU Cores',   1, '', (int) ($ci['cores'] ?? 0));
+                // NICHT 'CPU Cores' - der Name kommt aus den Altskripten, und knotenSchreiben()
+                // fuehrt denselben Wert schon als 'CPU Kerne'. Beide zu schreiben hiesse,
+                // dieselbe Zahl zweimal im Baum zu fuehren.
                 $this->schreib($ziel, 'CPU Threads', 1, '', (int) ($ci['cpus']  ?? 0));
                 // Als Text mit Einheit - so stand es bisher im Baum und so lesen es die Seiten.
                 $this->schreib($ziel, 'CPU MHz',     3, '', ((string) ($ci['mhz'] ?? '')) . ' MHz');
@@ -303,8 +322,11 @@ class ProxmoxNode extends IPSModule
 
     private function gaesteSchreiben(int $ziel, array $gaeste): void
     {
-        $zaehler = ((int) date('i') % self::ZAEHLER_RASTER) === 0;
+        $zaehler = $this->vollstaendig || ((int) date('i') % self::ZAEHLER_RASTER) === 0;
         $laufen  = 0;
+        $stand    = json_decode($this->ReadAttributeString('Zaehlerstand'), true);
+        if (!is_array($stand)) { $stand = []; }
+        $vollTakt = max(60, $this->ReadPropertyInteger('DurchsatzTakt'));
         // WO EIN GAST LIEGT, entscheidet der Bestand - nicht dieses Modul.
         // Die alten Skripte haben je Gast eine Dummy-INSTANZ direkt unter dem Host
         // angelegt. Wer stattdessen stur eine Kategorie unter 'Gäste' anlegt, verdoppelt
@@ -336,6 +358,15 @@ class ProxmoxNode extends IPSModule
             $this->schreib($ort, 'disk%',      2, 'Prozent',  round(((float) ($g['disk'] ?? 0)) / $md * 100, 2));
             $this->schreib($ort, 'uptime',     2, 'RDays',    round(((float) ($g['uptime'] ?? 0)) / 86400, 3));
             $this->schreib($ort, 'id',         1, '',         (int) ($g['vmid'] ?? 0));
+            // 'speed in'/'speed out' sind ABGELEITET: der Zuwachs des Zaehlers geteilt
+            // durch die verstrichene Zeit, in kB/s. Die alten Skripte haben sie gerechnet,
+            // Sammler und Module nicht - und weil die Variablen an LEBENDEN Gaesten hingen,
+            // war das keine Altlast, sondern eine Luecke: 71 Variablen mit 32 Monaten und
+            // rund 6 GB Historie standen still, ohne dass etwas ausgefallen waere. Deshalb
+            // hier weiterrechnen statt die Reihe umzuziehen - dieselbe Variable, dieselbe
+            // ID, dieselbe Geschichte.
+            $this->rate($ort, (int) ($g['vmid'] ?? 0), $stand, $vollTakt,
+                        (int) ($g['netin'] ?? 0), (int) ($g['netout'] ?? 0));
             if ($zaehler) {
                 $this->schreib($ort, 'netin',     1, '', (int) ($g['netin']     ?? 0));
                 $this->schreib($ort, 'netout',    1, '', (int) ($g['netout']    ?? 0));
@@ -354,6 +385,38 @@ class ProxmoxNode extends IPSModule
         $this->schreib($ziel, 'Gäste gesamt',   1, '', count($gaeste));
         $this->schreib($ziel, 'Gäste laufen',   1, '', $laufen);
         $this->schreib($ziel, 'Gäste gestoppt', 1, '', count($gaeste) - $laufen);
+        $this->WriteAttributeString('Zaehlerstand', json_encode($stand));
+    }
+
+    /**
+     * Durchsatz aus dem Zaehlerzuwachs, in kB/s.
+     *
+     * Der letzte Stand steht in einem Attribut, NICHT in der Zaehlervariablen. Nur so
+     * koennen Durchsatz (fein) und Zaehler (grob) unabhaengig takten - laege der Bezug
+     * in der Variablen, waere die Rate zwangslaeufig an deren Viertelstundenraster
+     * gebunden und jede kurze Spitze verloren.
+     *
+     * Ein Zaehler, der KLEINER geworden ist, bedeutet einen Neustart des Gastes. Dann
+     * gibt es keine sinnvolle Rate: der Stand wird uebernommen und nichts geschrieben,
+     * statt einen absurden Wert in die Reihe zu setzen.
+     */
+    private function rate(int $ort, int $vmid, array &$stand, int $takt, int $ein, int $aus): void
+    {
+        $jetzt = time();
+        $k     = (string) $vmid;
+        $vor   = $stand[$k] ?? null;
+        $stand[$k] = [$jetzt, $ein, $aus];
+        if (!is_array($vor) || count($vor) < 3) { return; }      // erster Lauf: nur merken
+
+        $dt = $jetzt - (int) $vor[0];
+        if ($dt < $takt) { $stand[$k] = $vor; return; }          // noch nicht faellig
+        if ($dt <= 0) { return; }
+        if ($ein >= (int) $vor[1]) {
+            $this->schreib($ort, 'speed in',  2, 'kBs', round(($ein - (int) $vor[1]) / 1024.0 / $dt, 3));
+        }
+        if ($aus >= (int) $vor[2]) {
+            $this->schreib($ort, 'speed out', 2, 'kBs', round(($aus - (int) $vor[2]) / 1024.0 / $dt, 3));
+        }
     }
 
     private function speicherSchreiben(int $ziel, array $speicher): void

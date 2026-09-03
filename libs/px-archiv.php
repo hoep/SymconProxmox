@@ -38,7 +38,8 @@ if (!function_exists('px_archiv_regel')) {
         // Unveraenderliches und Verwaltungskram. Eine Reihe aus immer demselben Wert
         // kostet Platz und sagt nichts; die Kapazitaet steckt ohnehin in der Prozentreihe.
         static $niemals = [
-            'CPU Kerne', 'CPU Threads', 'id', 'Port', 'Aktiv', 'Zugang hinterlegt',
+            'CPU Kerne', 'CPU Cores', 'CPU Threads', 'CPU MHz', 'CPU Modell',
+            'id', 'Port', 'Aktiv', 'Zugang hinterlegt', 'Gäste VMIDs',
             'RAM GB', 'RAM max GB', 'RAM', 'HDD', 'SWAP', 'Gesamt', 'maxdisk', 'maxswap',
             'Letzte Abfrage', 'Letzte Sicherung', 'Token-Name', 'Geheimnis eintragen',
         ];
