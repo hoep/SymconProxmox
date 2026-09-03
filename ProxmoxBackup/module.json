@@ -1,0 +1,13 @@
+{
+    "id": "{5D31F8B6-27A4-4C90-8E5B-3F62A9D14C77}",
+    "name": "ProxmoxBackup",
+    "type": 3,
+    "vendor": "Hoep",
+    "aliases": ["PBS", "Proxmox Backup", "Sicherung", "Backup Server"],
+    "url": "https://github.com/hoep/SymconProxmox",
+    "prefix": "PXB",
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "hidden": false
+}

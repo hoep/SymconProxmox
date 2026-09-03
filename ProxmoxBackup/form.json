@@ -1,0 +1,93 @@
+{
+  "elements": [
+    {
+      "type": "Label",
+      "caption": "Ein Proxmox Backup Server. Rein lesend — die Instanz löst keine Aufträge aus."
+    },
+    {
+      "type": "Label",
+      "caption": "Empfohlen: den Namen aus der geschützten Zugangsdatei eintragen (scripts/proxmox.zugang.json, 0600 root). Dann bleiben Token und Passwort AUS den Properties — die stehen in settings.json mit 0644 im Klartext. Adresse und Port kommen dann ebenfalls von dort."
+    },
+    {
+      "type": "ValidationTextBox",
+      "name": "Zugang",
+      "caption": "Name in der Zugangsdatei"
+    },
+    {
+      "type": "ValidationTextBox",
+      "name": "Adresse",
+      "caption": "Adresse (IP oder Name)"
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "Port",
+      "caption": "Port",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    {
+      "type": "Label",
+      "caption": "PBS kennt nur Token, kein Benutzer/Passwort. Schreibweise: benutzer@realm!name:geheimnis — mit Doppelpunkt, nicht mit Gleichheitszeichen wie bei PVE."
+    },
+    {
+      "type": "PasswordTextBox",
+      "name": "Token",
+      "caption": "API-Token"
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "Takt",
+      "caption": "Abfrage alle … Sekunden",
+      "minimum": 60,
+      "maximum": 3600,
+      "suffix": " s"
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "WarnAlterStunden",
+      "caption": "Sicherung gilt als veraltet nach",
+      "minimum": 1,
+      "maximum": 720,
+      "suffix": " h"
+    },
+    {
+      "type": "SelectObject",
+      "name": "Ziel",
+      "caption": "Ziel-Objekt"
+    }
+  ],
+  "actions": [
+    {
+      "type": "Button",
+      "caption": "Jetzt abfragen",
+      "onClick": "PXB_Abfragen($id);"
+    }
+  ],
+  "status": [
+    {
+      "code": 102,
+      "icon": "active",
+      "caption": "Erreichbar"
+    },
+    {
+      "code": 104,
+      "icon": "inactive",
+      "caption": "Adresse oder Token fehlt"
+    },
+    {
+      "code": 201,
+      "icon": "error",
+      "caption": "Token abgelehnt oder ohne Rechte"
+    },
+    {
+      "code": 202,
+      "icon": "error",
+      "caption": "Nicht erreichbar"
+    },
+    {
+      "code": 203,
+      "icon": "error",
+      "caption": "Antwortet, liefert aber keinen Datastore — Token ohne ACL-Eintrag"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+# Zugangsdaten gehoeren NIE ins Repo - sie liegen ausserhalb, in
+# scripts/proxmox.zugang.json mit 0600 root.
+*.zugang.json
+zugang*.json
+token
+*.pem
+*.key

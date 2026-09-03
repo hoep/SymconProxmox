@@ -1,0 +1,13 @@
+{
+    "id": "{2C9E5A47-8B31-4E62-9D0F-A47B15C3E8D2}",
+    "name": "ProxmoxNode",
+    "type": 3,
+    "vendor": "Hoep",
+    "aliases": ["Proxmox", "PVE", "Proxmox VE", "Virtualisierung"],
+    "url": "https://github.com/hoep/SymconProxmox",
+    "prefix": "PXV",
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "hidden": false
+}

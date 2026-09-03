@@ -1,0 +1,109 @@
+{
+  "elements": [
+    {
+      "type": "Label",
+      "caption": "Ein Proxmox-VE-Knoten. Rein lesend — die Instanz startet und stoppt nichts."
+    },
+    {
+      "type": "Label",
+      "caption": "Empfohlen: den Namen aus der geschützten Zugangsdatei eintragen (scripts/proxmox.zugang.json, 0600 root). Dann bleiben Token und Passwort AUS den Properties — die stehen in settings.json mit 0644 im Klartext. Adresse und Port kommen dann ebenfalls von dort."
+    },
+    {
+      "type": "ValidationTextBox",
+      "name": "Zugang",
+      "caption": "Name in der Zugangsdatei"
+    },
+    {
+      "type": "ValidationTextBox",
+      "name": "Adresse",
+      "caption": "Adresse (IP oder Name)"
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "Port",
+      "caption": "Port",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    {
+      "type": "Label",
+      "caption": "Anmeldung: entweder ein API-Token (empfohlen, keine Anmeldung nötig) ODER Benutzer und Passwort."
+    },
+    {
+      "type": "PasswordTextBox",
+      "name": "Token",
+      "caption": "API-Token  (benutzer@realm!name=geheimnis)"
+    },
+    {
+      "type": "ValidationTextBox",
+      "name": "Benutzer",
+      "caption": "Benutzer"
+    },
+    {
+      "type": "ValidationTextBox",
+      "name": "Realm",
+      "caption": "Realm"
+    },
+    {
+      "type": "PasswordTextBox",
+      "name": "Passwort",
+      "caption": "Passwort"
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "Takt",
+      "caption": "Abfrage alle … Sekunden",
+      "minimum": 30,
+      "maximum": 3600,
+      "suffix": " s"
+    },
+    {
+      "type": "Label",
+      "caption": "Ziel: Objekt, unter dem geschrieben wird. Leer oder 0 = unter dieser Instanz. Auf die bestehende Kategorie zeigen lassen, damit Archivreihen und Verknüpfungen erhalten bleiben."
+    },
+    {
+      "type": "SelectObject",
+      "name": "Ziel",
+      "caption": "Ziel-Objekt"
+    },
+    {
+      "type": "CheckBox",
+      "name": "Gaeste",
+      "caption": "Gäste (VMs und Container) erfassen"
+    },
+    {
+      "type": "CheckBox",
+      "name": "Speicher",
+      "caption": "Speicher erfassen"
+    }
+  ],
+  "actions": [
+    {
+      "type": "Button",
+      "caption": "Jetzt abfragen",
+      "onClick": "PXV_Abfragen($id);"
+    }
+  ],
+  "status": [
+    {
+      "code": 102,
+      "icon": "active",
+      "caption": "Erreichbar"
+    },
+    {
+      "code": 104,
+      "icon": "inactive",
+      "caption": "Keine Adresse hinterlegt"
+    },
+    {
+      "code": 201,
+      "icon": "error",
+      "caption": "Anmeldung abgelehnt — Token oder Passwort prüfen"
+    },
+    {
+      "code": 202,
+      "icon": "error",
+      "caption": "Nicht erreichbar"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "{7FE6D4C6-5C1C-4797-8AF9-D2BC67C6B56E}",
+  "name": "ProxmoxLagebild",
+  "type": 3,
+  "vendor": "Hoellwarth",
+  "prefix": "PXL",
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "compatibility": { "basis": "7.0" }
+}

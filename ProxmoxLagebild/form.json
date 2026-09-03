@@ -1,0 +1,18 @@
+{
+  "elements": [
+    { "type": "Label", "caption": "Liest den Proxmox-Teilbaum quer und erzeugt daraus die Befundtabelle, das Lagebild und den Knotenvergleich. Genau eine Instanz je Anlage." },
+    { "type": "Label", "caption": "Wurzel: die Kategorie, unter der die Host-Kategorien liegen (Hardware\\Proxmox)." },
+    { "type": "SelectObject", "name": "Wurzel", "caption": "Wurzel des Teilbaums" },
+    { "type": "NumberSpinner", "name": "Takt", "caption": "Auswerten alle … Sekunden", "minimum": 30, "maximum": 3600, "suffix": " s" },
+    { "type": "Label", "caption": "Archivpflege: hält den Teilbaum stündlich gegen die Archivregel. Schaltet nur EIN — Abschalten würde die aufgezeichnete Reihe löschen, deshalb wird ein zu Unrecht archivierter Wert nur ins Meldungslog geschrieben." },
+    { "type": "CheckBox", "name": "ArchivPflege", "caption": "Archivierung selbsttätig nachziehen" }
+  ],
+  "actions": [
+    { "type": "Button", "caption": "Jetzt auswerten",   "onClick": "PXL_Auswerten($id);" },
+    { "type": "Button", "caption": "Archivpflege jetzt", "onClick": "$r = PXL_Archivpflege($id); echo \"geprüft: {$r['geprueft']}, eingeschaltet: {$r['eingeschaltet']}, Aggregation: {$r['aggregation']}\";" }
+  ],
+  "status": [
+    { "code": 102, "icon": "active",   "caption": "Läuft" },
+    { "code": 104, "icon": "inactive", "caption": "Keine Wurzel gewählt" }
+  ]
+}
