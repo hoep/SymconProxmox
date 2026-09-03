@@ -269,6 +269,20 @@ class ProxmoxLagebild extends IPSModule
                                  $vw . ' verwaiste Sicherungsgruppen (Gast gibt es nicht mehr)',
                                  $this->wann($sp, 'Verwaiste Gruppen')];
                 }
+                $sf = $this->lies($sp, 'Sicherungen fehlerhaft');
+                if (is_numeric($sf) && $sf > 0) {
+                    $zeilen[] = ['kritisch', $host, IPS_GetName($sp),
+                                 $sf . ' Sicherungen mit fehlgeschlagener Prüfung',
+                                 $this->wann($sp, 'Sicherungen fehlerhaft')];
+                }
+                $su = $this->lies($sp, 'Sicherungen unverifiziert');
+                $sg = $this->lies($sp, 'Sicherungen gesamt');
+                if (is_numeric($su) && $su > 0 && is_numeric($sg) && $sg > 0) {
+                    // Eine nie gepruefte Sicherung ist eine Vermutung, keine Sicherung.
+                    $zeilen[] = [$su >= $sg ? 'hoch' : 'mittel', $host, IPS_GetName($sp),
+                                 $su . ' von ' . $sg . ' Sicherungen nie geprüft',
+                                 $this->wann($sp, 'Sicherungen unverifiziert')];
+                }
                 $ajs = $this->lies($sp, 'Alter jüngste Sicherung');
                 if (is_numeric($ajs) && $ajs > 2) {
                     $zeilen[] = ['kritisch', $host, IPS_GetName($sp),

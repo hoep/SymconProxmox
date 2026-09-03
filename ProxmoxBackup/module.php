@@ -30,6 +30,10 @@ class ProxmoxBackup extends IPSModule
      *  teuerste Abfrage des Moduls, und eine Sicherung entsteht nicht im Minutentakt. */
     private const TIEF_TAKT = 900;
 
+    /** Snapshot-Zaehlung: stuendlich. /snapshots ist die teuerste Abfrage des Servers -
+     *  gemessen 243 Zeilen fuer EINEN Datastore, wo die Gruppenliste ein Dutzend hat. */
+    private const SNAP_TAKT = 3600;
+
     /** Die geschuetzte Zugangsdatei. 0600 root - Symcon laeuft als root und darf sie lesen. */
     private const ZUGANGSDATEI = '/var/lib/symcon/scripts/proxmox.zugang.json';
 
@@ -50,6 +54,7 @@ class ProxmoxBackup extends IPSModule
         $this->RegisterPropertyInteger('WarnAlterStunden', 48);
 
         $this->RegisterAttributeInteger('LetzteTiefe', 0);
+        $this->RegisterAttributeInteger('LetzteSnapshots', 0);
 
         $this->RegisterTimer('Abfrage', 0, 'PXB_Abfragen($_IPS[\'TARGET\']);');
     }
@@ -76,6 +81,7 @@ class ProxmoxBackup extends IPSModule
     public function Vollabfrage(): void
     {
         $this->WriteAttributeInteger('LetzteTiefe', 0);
+        $this->WriteAttributeInteger('LetzteSnapshots', 0);
         $this->Abfragen();
     }
 
@@ -120,6 +126,8 @@ class ProxmoxBackup extends IPSModule
 
         $tief = (time() - $this->ReadAttributeInteger('LetzteTiefe')) >= self::TIEF_TAKT;
         if ($tief) { $this->WriteAttributeInteger('LetzteTiefe', time()); }
+        $snap = (time() - $this->ReadAttributeInteger('LetzteSnapshots')) >= self::SNAP_TAKT;
+        if ($snap) { $this->WriteAttributeInteger('LetzteSnapshots', time()); }
 
         $aeltesteStd = 0.0; $ohneSicherung = 0;
 
@@ -132,6 +140,7 @@ class ProxmoxBackup extends IPSModule
             $this->schreib($ort, 'Frei',     2, 'GB',      round(((float) ($d['avail'] ?? 0)) / 1073741824, 1));
             $this->schreib($ort, 'Gesamt',   2, 'GB',      round($ges / 1073741824, 1));
 
+            if ($snap) { $this->snapshots($px, $ort, $name); }
             if (!$tief) { continue; }
             $this->gruppen($px, $ort, $name, $aeltesteStd, $ohneSicherung);
             $this->dedup($px, $ort, $name);
@@ -156,6 +165,34 @@ class ProxmoxBackup extends IPSModule
      * 'last-backup' und ist eine Zeile je Gast statt einer je Sicherung - gemessen 243
      * Snapshot-Zeilen gegen ein Dutzend Gruppen.
      */
+    /**
+     * Einzelne Sicherungen zaehlen und ihren Pruefzustand bewerten.
+     *
+     * Die Gruppenliste sagt, WANN zuletzt gesichert wurde. Sie sagt nicht, ob die
+     * Sicherungen je geprueft wurden - und eine nie gepruefte Sicherung ist eine
+     * Vermutung, keine Sicherung. Dafuer braucht es die Snapshot-Liste.
+     *
+     * Das abgeloeste Skript zaehlte hier falsch: 'if ($x->verification->state="ok")' ist
+     * eine Zuweisung, kein Vergleich, und damit immer wahr. 'Backups ok' stand deshalb
+     * seit jeher gleich der Gesamtzahl und war nie eine Aussage.
+     */
+    private function snapshots(PxZugriff $px, int $ort, string $store): void
+    {
+        $sn = $px->daten('/admin/datastore/' . rawurlencode($store) . '/snapshots');
+        if (!is_array($sn)) { return; }
+        $ok = 0; $fehler = 0; $ohne = 0;
+        foreach ($sn as $x) {
+            $z = $x['verification']['state'] ?? null;
+            if ($z === null)      { $ohne++; }
+            elseif ($z === 'ok')  { $ok++; }
+            else                  { $fehler++; }
+        }
+        $this->schreib($ort, 'Sicherungen gesamt',        1, '', count($sn));
+        $this->schreib($ort, 'Sicherungen geprüft',       1, '', $ok);
+        $this->schreib($ort, 'Sicherungen unverifiziert', 1, '', $ohne);
+        $this->schreib($ort, 'Sicherungen fehlerhaft',    1, '', $fehler);
+    }
+
     private function gruppen(PxZugriff $px, int $ort, string $store, float &$aeltesteStd, int &$ohneSicherung): void
     {
         $gr = $px->daten('/admin/datastore/' . rawurlencode($store) . '/groups');
