@@ -3,7 +3,7 @@
     "author": "Hoep",
     "name": "Proxmox",
     "url": "https://github.com/hoep/SymconProxmox",
-    "version": "0.2.0",
-    "build": 1,
+    "version": "0.3.0",
+    "build": 2,
     "date": 0
 }

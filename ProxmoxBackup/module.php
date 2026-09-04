@@ -129,7 +129,7 @@ class ProxmoxBackup extends IPSModule
         $snap = (time() - $this->ReadAttributeInteger('LetzteSnapshots')) >= self::SNAP_TAKT;
         if ($snap) { $this->WriteAttributeInteger('LetzteSnapshots', time()); }
 
-        $aeltesteStd = 0.0; $ohneSicherung = 0;
+        $aeltesteStd = 0.0; $ohneSicherung = 0; $alter = [];
 
         foreach ($stores as $d) {
             $name = trim((string) ($d['store'] ?? ''));
@@ -142,12 +142,14 @@ class ProxmoxBackup extends IPSModule
 
             if ($snap) { $this->snapshots($px, $ort, $name); }
             if (!$tief) { continue; }
-            $this->gruppen($px, $ort, $name, $aeltesteStd, $ohneSicherung);
+            $this->gruppen($px, $ort, $name, $aeltesteStd, $ohneSicherung, $alter);
             $this->dedup($px, $ort, $name);
         }
 
         if ($tief) {
             $this->auftraege($px, $ziel);
+            $this->alterstabelle($ziel, $alter);
+            $this->aufgabenliste($px, $ziel);
             $this->schreib($ziel, 'Ältester Gast ohne Sicherung', 2, 'RDays', round($aeltesteStd / 24, 2));
             $this->schreib($ziel, 'Gruppen ohne Sicherung',       1, '',      $ohneSicherung);
             $frisch = ($aeltesteStd * 3600) <= $this->ReadPropertyInteger('WarnAlterStunden') * 3600;
@@ -193,7 +195,7 @@ class ProxmoxBackup extends IPSModule
         $this->schreib($ort, 'Sicherungen fehlerhaft',    1, '', $fehler);
     }
 
-    private function gruppen(PxZugriff $px, int $ort, string $store, float &$aeltesteStd, int &$ohneSicherung): void
+    private function gruppen(PxZugriff $px, int $ort, string $store, float &$aeltesteStd, int &$ohneSicherung, array &$alter = []): void
     {
         $gr = $px->daten('/admin/datastore/' . rawurlencode($store) . '/groups');
         if (!is_array($gr)) { return; }
@@ -212,9 +214,15 @@ class ProxmoxBackup extends IPSModule
             // ohne dass jemand etwas tun koennte ausser die Gruppe zu loeschen. Gemessen
             // waren es vm/9000, vm/9001, vm/9002 und vm/300 - letzte Sicherung 2023/2024.
             if ($vmid > 0 && count($lebt) && !isset($lebt[$vmid])) { $verwaist++; continue; }
-            if ($lb <= 0) { $ohne++; continue; }
+            $gast = ((string) ($g['backup-type'] ?? '?')) . '/' . $vmid;
+            if ($lb <= 0) {
+                $ohne++;
+                $alter[] = [$gast, $store, -1, 'nie'];
+                continue;
+            }
             if ($lb > $juengste) { $juengste = $lb; }
             $alt = time() - $lb;
+            $alter[] = [$gast, $store, $alt, $this->dauer($alt)];
             if ($alt > $aelteste) { $aelteste = $alt; }
         }
         $this->schreib($ort, 'Gruppen',           1, '', $anz);
@@ -297,6 +305,93 @@ class ProxmoxBackup extends IPSModule
     }
 
     // ---------------------------------------------------------------- privat
+
+    /**
+     * Eine Zeitspanne so schreiben, wie man sie ausspricht: "4 d 6 h", "22 h", "9 h".
+     * Sekunden sind hier nie die Frage - die Chronik zeigt Alter, nicht Laufzeiten.
+     */
+    private function dauer(int $sek): string
+    {
+        if ($sek < 0)     { return 'nie'; }
+        if ($sek < 3600)  { return max(1, (int) round($sek / 60)) . ' min'; }
+        $h = (int) floor($sek / 3600);
+        if ($h < 48)      { return $h . ' h'; }
+        $t = (int) floor($h / 24);
+        return $t . ' d ' . ($h - $t * 24) . ' h';
+    }
+
+    /**
+     * Alter der letzten Sicherung je Gast, aeltester zuerst.
+     *
+     * Die Kennzahl "aeltester Gast 1085 Tage ohne Sicherung" nennt das Ausmass, aber
+     * nicht den Gast - und ohne Namen kann niemand handeln. Deshalb die volle Liste;
+     * die Seite zeigt davon den Kopf.
+     *
+     * Gaeste OHNE jede Sicherung stehen mit -1 ganz oben. Sie sind der schlimmere Fall
+     * als ein alter Stand, duerfen also nicht ans Ende einer nach Alter sortierten
+     * Liste rutschen, nur weil ihr Alter nicht messbar ist.
+     */
+    private function alterstabelle(int $ziel, array $alter): void
+    {
+        usort($alter, function ($a, $b) {
+            if (($a[2] < 0) !== ($b[2] < 0)) { return $a[2] < 0 ? -1 : 1; }
+            return $b[2] <=> $a[2];
+        });
+        $zeilen = [['Gast', 'Datastore', 'Sekunden', 'Alter']];
+        foreach (array_slice($alter, 0, 60) as $z) { $zeilen[] = $z; }
+        $this->schreib($ziel, 'Sicherungsalter', 3, '', json_encode($zeilen, JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * Das Aufgabenprotokoll des Sicherungsservers ueber 30 Tage.
+     *
+     * Das ist die einzige Quelle im ganzen Aufbau, die RUECKWIRKEND Geschichte liefert:
+     * jede Verifikation, jeder Abgleich, jede Bereinigung steht dort mit Start, Ende und
+     * Ergebnis. Alles andere in der Chronik kann erst ab heute wachsen.
+     *
+     * Der Knotenname ist bei PBS fast immer 'localhost', aber eben nur fast: gefragt
+     * wird zuerst die Knotenliste, und nur wenn die nichts hergibt, wird geraten.
+     */
+    private function aufgabenliste(PxZugriff $px, int $ziel): void
+    {
+        $knoten = 'localhost';
+        $nl = $px->daten('/nodes');
+        if (is_array($nl) && isset($nl[0]['node'])) { $knoten = (string) $nl[0]['node']; }
+
+        $tk = $px->daten('/nodes/' . rawurlencode($knoten) . '/tasks'
+            . '?limit=400&since=' . (time() - 30 * 86400));
+        if (!is_array($tk)) { return; }
+
+        $host   = IPS_GetName($ziel);
+        $zeilen = [['Zeit', 'Host', 'Aufgabe', 'Objekt', 'Dauer', 'Ergebnis', 'Start']];
+        foreach ($tk as $t) {
+            $st = (int) ($t['starttime'] ?? 0);
+            if ($st <= 0) { continue; }
+            $en  = (int) ($t['endtime'] ?? 0);
+            $erg = trim((string) ($t['status'] ?? ''));
+            if ($erg === '') { $erg = $en > 0 ? 'OK' : 'läuft'; }
+            $zeilen[] = [
+                date('d.m. H:i', $st),
+                $host,
+                (string) ($t['worker_type'] ?? '?'),
+                mb_substr((string) ($t['worker_id'] ?? '—'), 0, 40),
+                $en > 0 ? $this->laufzeit($en - $st) : '—',
+                mb_substr($erg, 0, 40),
+                $st,
+            ];
+        }
+        $this->schreib($ziel, 'Aufgabenliste', 3, '', json_encode($zeilen, JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * Laufzeit einer Aufgabe als m:ss bzw. h:mm - so steht es auch in der PBS-Oberflaeche.
+     */
+    private function laufzeit(int $sek): string
+    {
+        if ($sek < 0) { $sek = 0; }
+        if ($sek < 3600) { return sprintf('%d:%02d', intdiv($sek, 60), $sek % 60); }
+        return sprintf('%d:%02d', intdiv($sek, 3600), intdiv($sek % 3600, 60));
+    }
 
     private function zugriff(): PxZugriff
     {

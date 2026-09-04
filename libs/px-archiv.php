@@ -41,7 +41,7 @@ if (!function_exists('px_archiv_regel')) {
             'CPU Kerne', 'CPU Cores', 'CPU Threads', 'CPU MHz', 'CPU Modell',
             'id', 'Port', 'Aktiv', 'Zugang hinterlegt', 'Gäste VMIDs',
             'RAM GB', 'RAM max GB', 'RAM', 'HDD', 'SWAP', 'Gesamt', 'maxdisk', 'maxswap',
-            'cpus', 'pid',
+            'cpus', 'pid', 'Kachel Stufe',
             'Letzte Abfrage', 'Letzte Sicherung', 'Token-Name', 'Geheimnis eintragen',
         ];
         if (in_array($name, $niemals, true)) { return [false, 0]; }

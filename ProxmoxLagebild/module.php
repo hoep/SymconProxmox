@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../libs/px-archiv.php';
+require_once __DIR__ . '/../libs/px-chronik.php';
 
 /**
  * ProxmoxLagebild (PXL) — die Befundtabelle und das Lagebild ueber ALLE Hosts.
@@ -79,13 +80,18 @@ class ProxmoxLagebild extends IPSModule
             if ($z[0] === 'hoch')     { $lage = 1; }
         }
 
-        $tab  = array_merge([['Stufe', 'Host', 'Objekt', 'Befund', 'seit']], $zeilen);
+        $ausgabe = array_map(function ($z) {
+            $z[0] = mb_strtoupper($z[0]);   // KRITISCH / HOCH / MITTEL / NIEDRIG
+            return $z;
+        }, $zeilen);
+        $tab  = array_merge([['Stufe', 'Host', 'Objekt', 'Befund', 'seit']], $ausgabe);
         $json = json_encode($tab, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $vgl  = $this->knotenvergleich($wurzel);
         $this->SetValue('Befunde',         $json);
         $this->SetValue('BefundeOffen',    count($zeilen));
         $this->SetValue('Lage',            $lage);
         $this->SetValue('Knotenvergleich', $vgl);
+        $this->schreib($wurzel, 'Knotenmatrix', 3, '', $this->matrix($wurzel));
 
         // SPIEGELN wie PXV und PXB. Die Seiten binden auf die Variablen unter der WURZEL,
         // nicht auf die der Instanz - stuenden die Werte nur hier, zeigten die Seiten
@@ -95,6 +101,35 @@ class ProxmoxLagebild extends IPSModule
         $this->schreib($wurzel, 'Befunde offen',   1, '', count($zeilen));
         $this->schreib($wurzel, 'Lage',            1, '', $lage);
         $this->schreib($wurzel, 'Knotenvergleich', 3, '', $vgl);
+
+        // Je Host die Kachelzeilen fuer das Lagebild. Sie stehen bewusst HIER und nicht
+        // in der Seite: was auf einer Knotenkarte wichtig ist, haengt vom Zustand ab -
+        // bei Ruhe die Routinezahlen, bei Last oder Stoerung das, was klemmt. Diese
+        // Entscheidung ist Logik, keine Gestaltung, und gehoert deshalb ins Modul.
+        $this->kacheln($wurzel, $zeilen);
+
+        // Legende des Gaestegitters. Ein Gitter aus Farbfeldern ohne Zahlen zwingt zum
+        // Zaehlen - die Vorlage nennt sie deshalb ausdruecklich.
+        $ges = 0; $lauf = 0;
+        foreach (IPS_GetChildrenIDs($wurzel) as $k) {
+            if (IPS_GetObject($k)['ObjectType'] != 0) { continue; }
+            $g = $this->lies($k, 'Gäste gesamt');
+            if (!is_numeric($g)) { continue; }
+            $ges  += (int) $g;
+            $lauf += (int) $this->lies($k, 'Gäste laufen');
+        }
+        $this->verdichtung($wurzel);
+
+        $this->schreib($wurzel, 'Gäste Legende', 3, '',
+            $ges . ' Gäste · ' . $lauf . ' laufen · ' . ($ges - $lauf) . ' gestoppt');
+
+        // Dieselben Zahlen einzeln, damit eine Kachel die blanke Zahl gross zeigen kann,
+        // ohne den Legendentext zerlegen zu muessen.
+        $this->schreib($wurzel, 'Gäste gesamt',   1, '', $ges);
+        $this->schreib($wurzel, 'Gäste laufen',   1, '', $lauf);
+        $this->schreib($wurzel, 'Gäste gestoppt', 1, '', $ges - $lauf);
+
+        $this->chronik($wurzel);
 
         if ($this->ReadPropertyBoolean('ArchivPflege')
             && (time() - $this->ReadAttributeInteger('LetzteArchivpflege')) >= self::ARCHIV_TAKT) {
@@ -149,12 +184,200 @@ class ProxmoxLagebild extends IPSModule
                                       $b['eingeschaltet'], $b['aggregation'], $b['geprueft']), KL_NOTIFY);
         }
         if ($b['ungefragt']) {
+            // Die Meldung muss sagen, was zu tun ist. Eine Warnung, die nur feststellt,
+            // dass etwas nicht zur Regel passt, und zugleich mitteilt, dass nichts
+            // unternommen wird, ist eine Sackgasse - sie wiederholt sich stuendlich und
+            // laesst den Leser ratlos zurueck.
             $this->LogMessage('Archivpflege: ' . count($b['ungefragt'])
-                              . ' Variablen sind archiviert, obwohl die Regel es nicht vorsieht — '
-                              . 'NICHT abgeschaltet, das würde die Reihe löschen: '
+                              . ' Variablen werden archiviert, obwohl die Regel sie nicht vorsieht. '
+                              . 'Absichtlich NICHT abgeschaltet — AC_SetLoggingStatus(false) löscht die '
+                              . 'aufgezeichnete Reihe. Zu entscheiden ist von Hand: entweder die '
+                              . 'Aufzeichnung im Archiv abschalten (Reihe geht verloren) oder den Namen '
+                              . 'in px_archiv_regel() aus der Ausnahmeliste nehmen. Betroffen: '
                               . implode(', ', array_slice($b['ungefragt'], 0, 10)), KL_WARNING);
         }
         return $b;
+    }
+
+    /**
+     * Die Chronik: dreissig Tage Verlauf, zusammengetragen aus dem, was die beiden
+     * anderen Module in den Baum geschrieben haben.
+     *
+     * Vier der sechs Zonen sind SOFORT gefuellt, weil Proxmox selbst ein
+     * Aufgabenprotokoll ueber Wochen fuehrt. Die Erreichbarkeitsbaender kommen aus dem
+     * Symcon-Archiv und koennen deshalb nur so weit zurueckreichen, wie hier
+     * aufgezeichnet wurde; die Zustandswechsel entstehen ueberhaupt erst durch den
+     * Vergleich zweier Laeufe. Beide fangen leer an - das ist ehrlicher, als sie mit
+     * dem heutigen Stand rueckwaerts aufzufuellen.
+     */
+    private function chronik(int $wurzel): void
+    {
+        $aufgaben = []; $alter = [];
+        foreach (IPS_GetChildrenIDs($wurzel) as $k) {
+            if (IPS_GetObject($k)['ObjectType'] != 0) { continue; }
+            $a = $this->lies($k, 'Aufgabenliste');
+            if (is_string($a) && $a !== '') { $aufgaben[] = json_decode($a, true) ?: []; }
+            $b = $this->lies($k, 'Sicherungsalter');
+            if (is_string($b) && $b !== '') { $alter[] = json_decode($b, true) ?: []; }
+        }
+
+        $prot = pxc_protokoll($aufgaben, 60);
+        $alt  = pxc_alter($alter, 12);
+        $this->schreib($wurzel, 'Aufgabenprotokoll', 3, '', $this->tab($prot));
+        $this->schreib($wurzel, 'Sicherungsläufe',   3, '', $this->tab(pxc_laeufe($aufgaben, 30, 10)));
+        $this->schreib($wurzel, 'Sicherungsalter',   3, '', $this->tab($alt));
+        $this->schreib($wurzel, 'Sicherungsalter Balken', 3, '', $this->tab(pxc_altersbalken($alt)));
+
+        // Die beiden Kennzahlen der Chronik, die keine Zaehlung sind, sondern ein
+        // Spitzenwert: der aelteste Stand ueberhaupt und wie viele Gaeste noch nie
+        // gesichert wurden. Beide stehen schon in der Liste - aber eine Kachel soll
+        // nicht erst eine Tabelle zerlegen muessen, um eine Zahl zu zeigen.
+        $ohne = 0; $spitze = '—'; $spitzeWer = '—';
+        foreach (array_slice($alt, 1) as $z) {
+            if ((int) $z[2] < 0) { $ohne++; continue; }
+            // Ein Gast, der NIE gesichert wurde, hat kein Alter. Er hat seine eigene
+            // Kachel; ihn hier als "aeltesten Stand" zu zeigen ergaebe die Zahl 'nie'.
+            if ($spitze === '—') { $spitze = (string) $z[3]; $spitzeWer = $z[0] . ' · ' . $z[1]; }
+        }
+        $this->schreib($wurzel, 'Älteste Sicherung',      3, '', $spitze);
+        $this->schreib($wurzel, 'Älteste Sicherung wer',  3, '', $spitzeWer);
+        $this->schreib($wurzel, 'Gäste ohne Sicherung',   1, '', $ohne);
+
+        // Fehlgeschlagene Laeufe der letzten sieben Tage. Gezaehlt wird ueber ALLE Hosts,
+        // denn eine Sicherung, die auf einem Knoten scheitert, ist nicht dadurch harmlos,
+        // dass sie auf den anderen vieren durchlief.
+        $grenze = time() - 7 * 86400; $fehler = 0;
+        foreach ($aufgaben as $rows) {
+            foreach (array_slice(is_array($rows) ? $rows : [], 1) as $z) {
+                if (!is_array($z) || count($z) < 7) { continue; }
+                if ((int) $z[6] >= $grenze && pxc_ergebnis((string) $z[5]) === 'fehler') { $fehler++; }
+            }
+        }
+        $this->schreib($wurzel, 'Jobfehler 7 Tage', 1, '', $fehler);
+
+        $this->baender($wurzel);
+        $this->wechsel($wurzel);
+    }
+
+    /**
+     * Die Erreichbarkeitsbaender: je Host ein Streifen aus dreissig Tageszellen.
+     *
+     * Gerechnet wird ueber die TAGESAGGREGATION des Archivs, nicht ueber die Rohwerte.
+     * Ein Tag mit zwei Messpunkten und ein Tag mit tausend muessen dasselbe Gewicht
+     * haben; die zeitgewichtete Aggregation liefert genau das - den Anteil des Tages,
+     * an dem der Host antwortete.
+     *
+     * Ein Tag ohne jede Aufzeichnung bleibt LEER statt gruen. Nicht gemessen ist nicht
+     * dasselbe wie in Ordnung, und gerade am Anfang ist fast alles nicht gemessen.
+     */
+    private function baender(int $wurzel): void
+    {
+        $arch = px_archiv_instanz();
+        $tage = 30;
+        $bis  = strtotime('tomorrow') - 1;
+        $von  = strtotime('today') - ($tage - 1) * 86400;
+
+        $zeilen = [['Host', 'Art', 'Zustände', 'Kennzahl']];
+        $neustarts = 0;
+        foreach (IPS_GetChildrenIDs($wurzel) as $k) {
+            if (IPS_GetObject($k)['ObjectType'] != 0) { continue; }
+            $ist_pve = $this->lies($k, 'Gäste gesamt') !== null;
+            $ist_pbs = $this->lies($k, 'Datastores')   !== null;
+            if (!$ist_pve && !$ist_pbs) { continue; }
+
+            // Ein Knoten, der weniger als dreissig Tage laeuft, ist in diesem Fenster
+            // neu gestartet worden. Das ist keine Zaehlung der Neustarts, sondern der
+            // KNOTEN mit Neustart - und genau so ist die Kachel beschriftet.
+            $up = $this->lies($k, 'uptime');
+            if (is_numeric($up) && (float) $up > 0 && (float) $up < $tage) { $neustarts++; }
+
+            $vid = 0;
+            foreach (IPS_GetChildrenIDs($k) as $c) {
+                if (IPS_VariableExists($c) && IPS_GetName($c) === 'Erreichbar') { $vid = $c; break; }
+            }
+            $zellen = array_fill(0, $tage, '');
+            $summe = 0.0; $gezaehlt = 0;
+            if ($vid > 0 && $arch > 0 && @AC_GetLoggingStatus($arch, $vid)) {
+                $w = @AC_GetAggregatedValues($arch, $vid, 1, $von, $bis, 0);
+                foreach (is_array($w) ? $w : [] as $e) {
+                    $i = (int) floor(((int) $e['TimeStamp'] - $von) / 86400);
+                    if ($i < 0 || $i >= $tage) { continue; }
+                    $a = (float) ($e['Avg'] ?? 0);
+                    $zellen[$i] = ($a >= 0.999) ? 'ok' : (($a >= 0.9) ? 'warn' : 'fehler');
+                    $summe += $a; $gezaehlt++;
+                }
+            }
+            $zeilen[] = [
+                IPS_GetName($k),
+                $ist_pve ? 'pve' : 'pbs',
+                implode(',', $zellen),
+                $gezaehlt > 0 ? (number_format($summe / $gezaehlt * 100, 1, ',', '') . ' %') : '—',
+            ];
+        }
+        $this->schreib($wurzel, 'Erreichbarkeitsband', 3, '', $this->tab($zeilen));
+        $this->schreib($wurzel, 'Knoten mit Neustart', 1, '', $neustarts);
+    }
+
+    /**
+     * Zustandswechsel: was sich seit dem letzten Lauf geaendert hat.
+     *
+     * Beobachtet werden drei Dinge je Host - ob er antwortet, wie seine Kachel steht und
+     * ob eine Aufgabe zuletzt scheiterte. Der Vergleich braucht ein Gedaechtnis, und das
+     * steht im Attribut, nicht im Baum: eine Variable traegt immer nur den JETZIGEN Wert,
+     * ein Wechsel ist aber die Differenz zweier Zeitpunkte.
+     *
+     * Beim allerersten Lauf wird nichts gemeldet. Sonst stuenden dreissig Zeilen
+     * "unbekannt -> erreichbar" in der Chronik, die kein Ereignis beschreiben, sondern
+     * nur, dass hier gerade eingeschaltet wurde.
+     */
+    private function wechsel(int $wurzel): void
+    {
+        // Gedaechtnis im BAUM, nicht im Attribut. Ein Attribut waere der naheliegende Ort,
+        // aber es entsteht nur beim Anlegen der Instanz - ein nachtraeglich ergaenztes
+        // gibt es auf einer laufenden Anlage erst nach dem naechsten Neustart. Im Baum
+        // steht es sofort und ueberlebt den Neustart ebenfalls.
+        $roh   = $this->lies($wurzel, 'Chronik Stand');
+        $stand = is_string($roh) ? json_decode($roh, true) : null;
+        $erst  = !is_array($stand) || !count($stand);
+        if (!is_array($stand)) { $stand = []; }
+        $roh2  = $this->lies($wurzel, 'Chronik Wechsel');
+        $liste = is_string($roh2) ? json_decode($roh2, true) : null;
+        if (!is_array($liste)) { $liste = []; }
+
+        $beob = [
+            'Erreichbar'             => 'Erreichbarkeit',
+            'Kachel Zustand'         => 'Zustand',
+            'Letzter Aufgabenfehler' => 'Aufgabe',
+        ];
+        $neu = [];
+        foreach (IPS_GetChildrenIDs($wurzel) as $k) {
+            if (IPS_GetObject($k)['ObjectType'] != 0) { continue; }
+            $host = IPS_GetName($k);
+            foreach ($beob as $name => $titel) {
+                $v = $this->lies($k, $name);
+                if ($v === null) { continue; }
+                $t = is_bool($v) ? ($v ? 'erreichbar' : 'stumm') : trim((string) $v);
+                if ($t === '') { $t = '—'; }
+                $t = mb_substr($t, 0, 42);
+                $schl = $host . '|' . $name;
+                $neu[$schl] = $t;
+                if ($erst || !isset($stand[$schl]) || $stand[$schl] === $t) { continue; }
+                $liste[] = [date('d.m. H:i'), $host, $titel . ': ' . $stand[$schl] . ' → ' . $t];
+            }
+        }
+        $liste = array_slice($liste, -80);
+        $this->schreib($wurzel, 'Chronik Stand',   3, '', (string) json_encode($neu,   JSON_UNESCAPED_UNICODE));
+        $this->schreib($wurzel, 'Chronik Wechsel', 3, '', (string) json_encode($liste, JSON_UNESCAPED_UNICODE));
+
+        $zeilen = [['Zeit', 'Host', 'Wechsel']];
+        foreach (array_reverse($liste) as $z) { $zeilen[] = $z; }
+        $this->schreib($wurzel, 'Zustandswechsel', 3, '', $this->tab($zeilen));
+    }
+
+    /** Eine Zeilentabelle so schreiben, wie das Tabellen-Widget sie liest. */
+    private function tab(array $zeilen): string
+    {
+        return (string) json_encode($zeilen, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
     /** Variable unter $eltern finden oder anlegen und schreiben. */
@@ -172,6 +395,218 @@ class ProxmoxLagebild extends IPSModule
             px_archiv_anwenden(px_archiv_instanz(), $id, $name, $typ);
         }
         @SetValue($id, $wert);
+    }
+
+    /**
+     * Dieselben Zahlen wie der Knotenvergleich, nur GEDREHT: Kennzahlen als Zeilen,
+     * Knoten als Spalten.
+     *
+     * Der Unterschied ist nicht kosmetisch. Man vergleicht Knoten MITEINANDER - dafuer
+     * muessen ihre Werte nebeneinander in einer Zeile stehen. Andersherum liest man je
+     * Knoten eine Zeile und muss die Spalten im Kopf zusammensuchen.
+     *
+     * Ein Knoten, der nicht antwortet, bekommt eine LEERE Spalte statt seiner letzten
+     * bekannten Werte - alte Zahlen sehen aus wie aktuelle und sind schlimmer als eine
+     * Luecke.
+     */
+    private function matrix(int $wurzel): string
+    {
+        $knoten = [];
+        foreach (IPS_GetChildrenIDs($wurzel) as $k) {
+            if (IPS_GetObject($k)['ObjectType'] != 0) { continue; }
+            if ($this->lies($k, 'Gäste gesamt') === null) { continue; }
+            $knoten[IPS_GetName($k)] = $k;
+        }
+        if (!$knoten) { return '[]'; }
+
+        $zeilen = [
+            ['CPU %',      'CPU',            0],
+            ['RAM %',      'RAM used',       0],
+            ['SWAP %',     'SWAP used',      0],
+            ['Platte %',   'HDD used',       0],
+            ['I/O-Wait %', 'I/O Wait',       0],
+            // Die Einheit steht im Zeilennamen; in der Matrix darf sie NICHT noch einmal
+            // als Spaltenzusatz gesetzt werden, sonst liest man '% %'.
+            ['Last',       'Last 15 min',    2],
+            ['Gäste',      'Gäste gesamt',   0],
+            ['läuft',      'Gäste laufen',   0],
+        ];
+        $kopf = array_merge([''], array_keys($knoten));
+        $tab  = [$kopf];
+        foreach ($zeilen as [$titel, $feld, $dec]) {
+            $r = [$titel];
+            foreach ($knoten as $n => $k) {
+                $erreichbar = $this->lies($k, 'Erreichbar');
+                $v = $this->lies($k, $feld);
+                $r[] = ($erreichbar === false || !is_numeric($v))
+                    ? '—'
+                    : number_format((float) $v, $dec, ',', '');
+            }
+            $tab[] = $r;
+        }
+        return json_encode($tab, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * Kennzahlen der Verdichtung: wie viel MEHR zugeteilt ist, als vorhanden.
+     *
+     * Ueberbuchung ist die eigentliche Frage einer Virtualisierung - nicht "wie voll ist
+     * der Speicher", sondern "was passiert, wenn alle Gaeste gleichzeitig holen, was
+     * ihnen versprochen wurde". Der Faktor steht deshalb vor der Belegung.
+     */
+    private function verdichtung(int $wurzel): void
+    {
+        $ramZu = 0.0; $ramDa = 0.0; $vcpu = 0; $kerne = 0;
+        $belegt = 0.0; $gesamt = 0.0; $dedup = [];
+
+        foreach (IPS_GetChildrenIDs($wurzel) as $k) {
+            if (IPS_GetObject($k)['ObjectType'] != 0) { continue; }
+            $ram = $this->lies($k, 'RAM');            // GB des Knotens
+            if (is_numeric($ram)) { $ramDa += (float) $ram; }
+            $c = $this->lies($k, 'CPU Cores');
+            if (is_numeric($c)) { $kerne += (int) $c; }
+
+            // Gaeste: zugeteilter Speicher und vCPU. Sie liegen als Dummy-Instanzen
+            // direkt unter dem Host oder als Kategorien unter 'Gäste'.
+            $sammle = function (int $eltern) use (&$sammle, &$ramZu, &$vcpu) {
+                foreach (IPS_GetChildrenIDs($eltern) as $c2) {
+                    if (IPS_VariableExists($c2)) { continue; }
+                    $m = $this->lies($c2, 'RAM max GB');
+                    if (is_numeric($m)) { $ramZu += (float) $m; }
+                    $cp = $this->lies($c2, 'cpus');
+                    if (is_numeric($cp)) { $vcpu += (int) $cp; }
+                    $sammle($c2);
+                }
+            };
+            $sammle($k);
+
+            // Sicherungsspeicher, JE HOST EINMAL.
+            //
+            // PBS meldet fuer jeden Datastore die Werte des darunterliegenden
+            // DATEISYSTEMS. Galantine hat vier Datastores, und alle vier melden dieselben
+            // 80.417 GB - wer sie addiert, kommt auf das Vierfache des vorhandenen
+            // Platzes (gemessen 339 TB statt gut 100). Gleiche Gesamt/Frei-Paare zaehlen
+            // deshalb nur einmal.
+            //
+            // Die Speicher der PVE-Knoten fehlen hier bewusst: der Sammler schreibt fuer
+            // sie kein 'Gesamt', nur Belegung und Frei. Diese Kennzahl ist also die des
+            // SICHERUNGSSPEICHERS, und so heisst sie auch.
+            $gesehen = [];
+            foreach (IPS_GetChildrenIDs($k) as $s2) {
+                if (IPS_GetObject($s2)['ObjectType'] != 0) { continue; }
+                $g = $this->lies($s2, 'Gesamt'); $f = $this->lies($s2, 'Frei');
+                if (is_numeric($g) && is_numeric($f) && $g > 0) {
+                    $schluessel = round((float) $g, 1) . '/' . round((float) $f, 1);
+                    if (!isset($gesehen[$schluessel])) {
+                        $gesehen[$schluessel] = true;
+                        $gesamt += (float) $g; $belegt += ((float) $g - (float) $f);
+                    }
+                }
+                $d = $this->lies($s2, 'Dedup-Faktor');
+                if (is_numeric($d) && $d > 0) { $dedup[] = (float) $d; }
+            }
+        }
+
+        if ($ramDa > 0) {
+            $this->schreib($wurzel, 'RAM Überbuchung', 2, '', round($ramZu / $ramDa, 2));
+            $this->schreib($wurzel, 'RAM Überbuchung Text', 3, '',
+                round($ramZu) . ' von ' . round($ramDa) . ' GB zugeteilt');
+        }
+        if ($kerne > 0) {
+            $this->schreib($wurzel, 'vCPU Überbuchung', 2, '', round($vcpu / $kerne, 1));
+            $this->schreib($wurzel, 'vCPU Überbuchung Text', 3, '',
+                $vcpu . ' vCPU auf ' . $kerne . ' Kerne');
+        }
+        if ($gesamt > 0) {
+            $this->schreib($wurzel, 'Sicherungsspeicher belegt TB', 2, '', round($belegt / 1024, 1));
+            $this->schreib($wurzel, 'Sicherungsspeicher Text', 3, '',
+                'von ' . round($gesamt / 1024, 1) . ' TB · ' . round($belegt / $gesamt * 100) . ' %');
+        }
+        if ($dedup) {
+            $this->schreib($wurzel, 'Dedup-Faktor gesamt', 2, '', round(array_sum($dedup) / count($dedup), 1));
+            $this->schreib($wurzel, 'Dedup Text', 3, '', count($dedup) . ' Datastores gemittelt');
+        }
+    }
+
+    /**
+     * Zustandswort und zwei Kontextzeilen je Host.
+     *
+     * Die zweite Zeile ist VERAENDERLICH: laeuft alles rund, stehen dort die
+     * Routinezahlen (CPU, RAM, Laufzeit). Greift eine Regel, steht dort stattdessen der
+     * dringlichste Befund im Klartext. Eine Karte, die immer dasselbe zeigt, zwingt zum
+     * Weiterklicken; eine, die sich nach der Lage richtet, beantwortet die Frage sofort.
+     */
+    private function kacheln(int $wurzel, array $zeilen): void
+    {
+        // Befunde nach Host gruppieren, dringlichster zuerst (die Liste ist bereits sortiert)
+        $proHost = [];
+        foreach ($zeilen as $z) { $proHost[$z[1]][] = $z; }
+
+        foreach (IPS_GetChildrenIDs($wurzel) as $k) {
+            if (IPS_GetObject($k)['ObjectType'] != 0) { continue; }
+            $host = IPS_GetName($k);
+            $err  = $this->lies($k, 'Erreichbar');
+            if ($err === null) { continue; }
+
+            $ist_pve = $this->lies($k, 'Gäste gesamt') !== null;
+            $bef     = $proHost[$host] ?? [];
+            $stufe   = 0; $zustand = 'ok'; $z1 = ''; $z2 = '';
+
+            if ($err === false) {
+                // Unbekannt, nicht kaputt: ein Knoten im Neustart ist kein Ausfall.
+                $stufe = 3; $zustand = '?';
+                $z1 = 'keine Antwort';
+                $le = $this->lies($k, 'Letzte Abfrage');
+                $z2 = is_numeric($le) && $le > 0
+                    ? ('seit ' . date('H:i', (int) $le) . ' ohne Antwort')
+                    : 'Zustand unbekannt';
+            } else {
+                $ernst = array_values(array_filter($bef, function ($z) {
+                    return $z[0] === 'kritisch' || $z[0] === 'hoch';
+                }));
+                if ($ernst) {
+                    // Zwei Stufen, zwei Woerter: die Kachel bindet auf DIESEN Text, nicht
+                    // auf die Kennziffer - der assoc zeigt den Wert der Variablen gross und
+                    // den zugeordneten Text nur als kleine Pille. Also muss der Wert selbst
+                    // das Wort sein, und die Farbe kommt aus der Zuordnung darauf.
+                    $stufe   = ($ernst[0][0] === 'kritisch') ? 2 : 1;
+                    $zustand = ($stufe === 2) ? '!!' : '!';
+                } else {
+                    $stufe = 0; $zustand = 'ok';
+                }
+
+                if ($ist_pve) {
+                    $g = (int) $this->lies($k, 'Gäste gesamt');
+                    $l = (int) $this->lies($k, 'Gäste laufen');
+                    $z1 = $g . ($g === 1 ? ' Gast · ' : ' Gäste · ') . $l . ' laufen';
+                } else {
+                    $ds = (int) $this->lies($k, 'Datastores');
+                    $z1 = $ds . ' ' . ($ds === 1 ? 'Datastore' : 'Datastores');
+                }
+
+                if ($ernst) {
+                    // Der dringlichste Befund, gekuerzt auf eine Zeile.
+                    $z2 = $ernst[0][2] . ': ' . $ernst[0][3];
+                    if (mb_strlen($z2) > 62) { $z2 = mb_substr($z2, 0, 60) . '…'; }
+                } elseif ($ist_pve) {
+                    $cpu = $this->lies($k, 'CPU'); $ram = $this->lies($k, 'RAM used');
+                    $up  = $this->lies($k, 'uptime');
+                    $t = [];
+                    if (is_numeric($cpu)) { $t[] = 'CPU ' . round($cpu) . ' %'; }
+                    if (is_numeric($ram)) { $t[] = 'RAM ' . round($ram) . ' %'; }
+                    if (is_numeric($up))  { $t[] = round($up) . ' d'; }
+                    $z2 = implode(' · ', $t);
+                } else {
+                    $a = $this->lies($k, 'Ältester Gast ohne Sicherung');
+                    $z2 = is_numeric($a) ? ('älteste Sicherung ' . round($a, 1) . ' d') : 'Sicherungen frisch';
+                }
+            }
+
+            $this->schreib($k, 'Kachel Zustand', 3, '', $zustand);
+            $this->schreib($k, 'Kachel Stufe',   1, '', $stufe);
+            $this->schreib($k, 'Kachel Zeile 1', 3, '', $z1);
+            $this->schreib($k, 'Kachel Zeile 2', 3, '', $z2);
+        }
     }
 
     /** Wert einer Variablen unter $eltern, oder null. */

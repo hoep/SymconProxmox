@@ -255,18 +255,40 @@ class ProxmoxNode extends IPSModule
         // Gefiltert wird ueber die STARTZEIT. Ein Auftrag, der um 02:00 beginnt und um
         // 03:40 scheitert, faengt weit vor jedem kurzen Fenster an - deshalb ein
         // Tagesfenster und zaehlen, statt Ereignisse abgreifen zu wollen.
-        $tk = $px->daten('/nodes/' . rawurlencode($kname) . '/tasks?limit=200&errors=1&since=' . (time() - 86400));
+        // Gefragt wird ueber 30 TAGE und ohne 'errors=1'. Der Fehlerzaehler braucht nur
+        // einen Tag, die Chronik aber die ganze Geschichte - und das Aufgabenprotokoll
+        // ist die einzige Quelle im Aufbau, die rueckwirkend etwas ueber die letzten
+        // Wochen weiss. Zweimal fragen waere zweimal Kontingent fuer dieselbe Liste.
+        $tk = $px->daten('/nodes/' . rawurlencode($kname) . '/tasks?limit=400&since=' . (time() - 30 * 86400));
         if (is_array($tk)) {
-            $fehler = 0; $letzter = '';
+            $fehler = 0; $letzter = ''; $grenze = time() - 86400;
+            $zeilen = [['Zeit', 'Host', 'Aufgabe', 'Objekt', 'Dauer', 'Ergebnis', 'Start']];
             foreach ($tk as $t) {
-                $s2 = (string) ($t['status'] ?? '');
-                if ($s2 !== '' && $s2 !== 'OK') {
+                $st = (int) ($t['starttime'] ?? 0);
+                if ($st <= 0) { continue; }
+                $en = (int) ($t['endtime'] ?? 0);
+                $s2 = trim((string) ($t['status'] ?? ''));
+                // Eine laufende Aufgabe hat weder Ende noch Ergebnis. Sie als Fehler zu
+                // zaehlen waere falsch, sie zu verschweigen aber auch - im Protokoll
+                // steht sie als 'laeuft'.
+                if ($s2 === '') { $s2 = $en > 0 ? 'OK' : 'läuft'; }
+                if ($s2 !== 'OK' && $s2 !== 'läuft' && $st >= $grenze) {
                     $fehler++;
                     if ($letzter === '') { $letzter = ($t['type'] ?? '?') . ' ' . substr($s2, 0, 40); }
                 }
+                $zeilen[] = [
+                    date('d.m. H:i', $st),
+                    $kname,
+                    (string) ($t['type'] ?? '?'),
+                    mb_substr((string) ($t['id'] ?? '—'), 0, 40),
+                    $en > 0 ? $this->laufzeit($en - $st) : '—',
+                    mb_substr($s2, 0, 40),
+                    $st,
+                ];
             }
             $this->schreib($ziel, 'Aufgaben mit Fehler 24h', 1, '', $fehler);
             $this->schreib($ziel, 'Letzter Aufgabenfehler',  3, '', $letzter !== '' ? $letzter : '—');
+            $this->schreib($ziel, 'Aufgabenliste',           3, '', json_encode($zeilen, JSON_UNESCAPED_UNICODE));
         }
         $ze = $px->daten('/nodes/' . rawurlencode($kname) . '/certificates/info');
         if (is_array($ze)) {
@@ -497,6 +519,17 @@ class ProxmoxNode extends IPSModule
     }
 
     /** Variable finden oder anlegen und schreiben. Profil nur setzen, wenn keines da ist. */
+    /**
+     * Laufzeit einer Aufgabe als m:ss bzw. h:mm - dieselbe Schreibweise wie in der
+     * Proxmox-Oberflaeche, damit man beides nebeneinander lesen kann.
+     */
+    private function laufzeit(int $sek): string
+    {
+        if ($sek < 0) { $sek = 0; }
+        if ($sek < 3600) { return sprintf('%d:%02d', intdiv($sek, 60), $sek % 60); }
+        return sprintf('%d:%02d', intdiv($sek, 3600), intdiv($sek % 3600, 60));
+    }
+
     private function schreib(int $eltern, string $name, int $typ, string $profil, $wert): void
     {
         $id = 0;
