@@ -3,6 +3,9 @@
     "author": "Hoep",
     "name": "Proxmox",
     "url": "https://github.com/hoep/SymconProxmox",
+    "compatibility": {
+        "version": "7.1"
+    },
     "version": "0.3.0",
     "build": 2,
     "date": 0

@@ -8,6 +8,28 @@ Drei Module fuer die Beobachtung der Proxmox-Umgebung. Rein lesend.
 | ProxmoxBackup | PXB | Ein Proxmox Backup Server: Datastores, Sicherungsgruppen, Pruef- und Abgleichauftraege |
 | ProxmoxLagebild | PXL | Liest quer: Befundtabelle, Lage, Knotenvergleich, Archivpflege |
 
+
+## Voraussetzungen
+
+- IP-Symcon ab Kernel 7.1, PHP 8
+- Ein erreichbarer Proxmox-Knoten (VE oder Backup Server) mit einem
+  **API-Token**. Lesende Rechte genuegen - die Module schreiben nichts.
+
+## Installation
+
+Konsole → *Kern-Instanzen* → **Modules** → Hinzufuegen:
+
+```
+https://github.com/hoep/SymconProxmox
+```
+
+Danach je beobachtetem Knoten eine Instanz anlegen und das Token eintragen. Die
+Abschnitte *Die Zugangsdaten* und *Takte* weiter unten sagen, was wohin gehoert.
+
+## Lizenz
+
+MIT - siehe `LICENSE`.
+
 ## Warum Module und nicht weiter Skripte
 
 Nicht wegen der Abfrage - die kann ein Skript genauso. Wegen des **Timers**. Am
