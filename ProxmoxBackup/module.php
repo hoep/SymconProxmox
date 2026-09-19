@@ -200,9 +200,9 @@ class ProxmoxBackup extends IPSModule
         $gr = $px->daten('/admin/datastore/' . rawurlencode($store) . '/groups');
         if (!is_array($gr)) { return; }
 
-        // Der Datastore heisst nach seinem Knoten (Backup_Majestix ...). VMIDs sind nur JE
-        // CLUSTER eindeutig - eine globale Liste haette vm/100 auf Obelix als Beleg dafuer
-        // genommen, dass vm/100 auf Majestix noch lebt.
+        // Der Datastore heisst nach seinem Knoten (Backup_<Knoten>). VMIDs sind nur JE
+        // CLUSTER eindeutig - eine globale Liste haette vm/100 auf dem einen Knoten als Beleg
+        // dafuer genommen, dass vm/100 auf einem anderen noch lebt.
         $lebt = $this->lebendigeGaeste((string) preg_replace('/^Backup[_-]?/i', '', $store));
 
         $juengste = 0; $aelteste = 0; $anz = 0; $ohne = 0; $verwaist = 0;

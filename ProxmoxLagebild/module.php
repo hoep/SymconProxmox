@@ -20,8 +20,8 @@ require_once __DIR__ . '/../libs/px-chronik.php';
  *
  * Hier liegt auch die ARCHIVPFLEGE. Nicht aus Verlegenheit, sondern weil dieses Modul
  * den Teilbaum ohnehin durchlaeuft - und weil die Archivierung vorher eine einmalige
- * Handlung war: gemessen am 03.09.2026 hatte Proxplex 59 Variablen und davon 0
- * archiviert, Falbala und Gutemine je 11 und davon 0. Ein neuer Knoten kam stumm ins
+ * Handlung war: gemessen am 03.09.2026 hatte ein Knoten 59 Variablen und davon 0
+ * archiviert, zwei Backup-Server je 11 und davon 0. Ein neuer Knoten kam stumm ins
  * Haus. Als Regel an dieser Stelle kann das nicht wieder passieren.
  */
 class ProxmoxLagebild extends IPSModule
@@ -483,7 +483,7 @@ class ProxmoxLagebild extends IPSModule
             // Sicherungsspeicher, JE HOST EINMAL.
             //
             // PBS meldet fuer jeden Datastore die Werte des darunterliegenden
-            // DATEISYSTEMS. Galantine hat vier Datastores, und alle vier melden dieselben
+            // DATEISYSTEMS. Ein Server hier hat vier Datastores, und alle vier melden dieselben
             // 80.417 GB - wer sie addiert, kommt auf das Vierfache des vorhandenen
             // Platzes (gemessen 339 TB statt gut 100). Gleiche Gesamt/Frei-Paare zaehlen
             // deshalb nur einmal.
@@ -661,7 +661,7 @@ class ProxmoxLagebild extends IPSModule
             $zeilen[] = ['hoch', $host, 'Arbeitsspeicher', 'Belegung ' . round($ram, 1) . ' %', $this->wann($k, 'RAM used')];
         }
         // Voller Auslagerungsspeicher ist ein Vorbote, kein Zustand: der Knoten laeuft
-        // noch, wird aber bei der naechsten Anforderung zaeh. Gemessen hatte Majestix
+        // noch, wird aber bei der naechsten Anforderung zaeh. Gemessen hatte ein Knoten
         // 99,4 Prozent belegt, und niemandem war es aufgefallen.
         $sw = $this->lies($k, 'SWAP used');
         if (is_numeric($sw) && $sw >= 80) {

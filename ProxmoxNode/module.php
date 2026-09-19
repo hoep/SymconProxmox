@@ -591,7 +591,7 @@ class ProxmoxNode extends IPSModule
             IPS_SetParent($id, $eltern);
             if ($profil !== '') { @IPS_SetVariableCustomProfile($id, $profil); }
             // Genau hier fehlte es bisher. Die Archivierung war eine einmalige Handlung,
-            // und was danach entstand, fiel durch: gemessen am 03.09.2026 hatte Proxplex
+            // und was danach entstand, fiel durch: gemessen am 03.09.2026 hatte ein Knoten
             // 59 Variablen und davon 0 archiviert. Jetzt entscheidet die Regel dort, wo
             // die Variable entsteht - ein neuer Knoten kommt nicht mehr stumm ins Haus.
             px_archiv_anwenden(px_archiv_instanz(), $id, $name, $typ);

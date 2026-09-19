@@ -34,7 +34,7 @@ MIT - siehe `LICENSE`.
 
 Nicht wegen der Abfrage - die kann ein Skript genauso. Wegen des **Timers**. Am
 15.02.2026 wurden fuenf Zeitereignisse abgehakt, und ein halbes Jahr lang fiel niemandem
-auf, dass Majestix und Asterix keine Werte mehr lieferten: rund 1.050 Variablen zeigten
+auf, dass zwei Knoten keine Werte mehr lieferten: rund 1.050 Variablen zeigten
 Februarstaende, teils verlinkt in einer Ansicht. Ein Modultimer ist ein verstecktes
 Objekt - er erscheint in der Baumansicht gar nicht und kann deshalb nicht versehentlich
 weggeklickt werden.
@@ -99,7 +99,7 @@ Verwaltungszeitstempel) und Text bleiben draussen.
 
 Die Regel wird dort angewendet, wo die Variable **entsteht**. Vorher war die
 Archivierung eine einmalige Handlung, und alles Spaetere fiel durch: gemessen am
-03.09.2026 hatte Proxplex 59 Variablen und davon 0 archiviert, Falbala und Gutemine je
+03.09.2026 hatte ein Knoten 59 Variablen und davon 0 archiviert, zwei Backup-Server je
 11 und davon 0. Ein neuer Knoten kam stumm ins Haus.
 
 **Es wird nur eingeschaltet, nie ausgeschaltet.** `AC_SetLoggingStatus(..., false)`
@@ -138,9 +138,9 @@ stuende die Seite dauerhaft rot, ohne dass jemand etwas tun koennte ausser die G
 loeschen - deshalb *niedrig*, und getrennt gezaehlt.
 
 Erkannt wird das ueber die VMIDs, die es auf dem zugehoerigen Knoten wirklich noch gibt.
-Der Datastore heisst nach seinem Knoten (`Backup_Majestix`), und VMIDs sind nur **je
-Cluster** eindeutig: eine globale Liste haette `vm/100` auf Obelix als Beleg dafuer
-genommen, dass `vm/100` auf Majestix noch lebt. PXB liest die Liste aus dem Baum - die
+Der Datastore heisst nach seinem Knoten (`Backup_<Knoten>`), und VMIDs sind nur **je
+Cluster** eindeutig: eine globale Liste haette `vm/100` auf dem einen Knoten als Beleg
+dafuer genommen, dass `vm/100` auf einem anderen noch lebt. PXB liest die Liste aus dem Baum - die
 Module reden nicht miteinander, der Baum ist die gemeinsame Sprache. Findet sich der
 Knoten nicht, unterbleibt die Pruefung: lieber nicht pruefen als jede Gruppe fuer
 verwaist erklaeren.
@@ -151,6 +151,6 @@ Neun Hosts, also neun Instanzen plus eine PXL:
 
 | Instanz | Typ | Zugang | Ziel |
 |---|---|---|---|
-| Majestix, Asterix, Obelix, VerleihNix, Proxplex | PXV | `majestix` ... | die bestehende Host-Kategorie |
-| Zechine, Galantine, Falbala, Gutemine | PXB | `zechine` ... | die bestehende Host-Kategorie |
+| fuenf Virtualisierungsknoten | PXV | je Knoten ein Zugang | die bestehende Host-Kategorie |
+| vier Backup-Server | PXB | je Server ein Zugang | die bestehende Host-Kategorie |
 | Lagebild | PXL | — | `Hardware\Proxmox` |

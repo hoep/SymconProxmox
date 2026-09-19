@@ -7,8 +7,8 @@ declare(strict_types=1);
  *
  * WARUM ES DIESE DATEI GIBT: die Archivierung war vorher eine einmalige Handlung. Ein
  * Durchlauf hat den damaligen Bestand eingerichtet, und alles, was danach entstand, fiel
- * durch. Gemessen am 03.09.2026: Proxplex 59 Variablen, davon 0 archiviert; Falbala und
- * Gutemine je 11, davon 0. Ein neuer Knoten kam also stumm ins Haus. Deshalb steht die
+ * durch. Gemessen am 03.09.2026: ein Knoten 59 Variablen, davon 0 archiviert; zwei
+ * Backup-Server je 11, davon 0. Ein neuer Knoten kam also stumm ins Haus. Deshalb steht die
  * Entscheidung jetzt dort, wo die Variable ENTSTEHT, und nicht in einem Skript, das
  * jemand daran denken muesste erneut zu starten.
  *
