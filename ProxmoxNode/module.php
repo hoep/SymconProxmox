@@ -10,7 +10,7 @@ require_once __DIR__ . '/../libs/px-archiv.php';
  *
  * WARUM EIN MODUL UND NICHT WEITER SKRIPTE: nicht wegen der Abfrage - die kann ein Skript
  * genauso. Sondern wegen des TIMERS. Am 15.02.2026 wurden fuenf Ereignisse abgehakt, und
- * ein halbes Jahr lang fiel niemandem auf, dass Majestix und Asterix keine Werte mehr
+ * ein halbes Jahr lang fiel niemandem auf, dass zwei Knoten keine Werte mehr
  * liefern: rund 1.050 Variablen zeigten Februarstaende, teils verlinkt in einer Ansicht.
  * Ein Modultimer ist ein verstecktes Objekt - er erscheint in der Baumansicht gar nicht
  * und kann deshalb nicht versehentlich weggeklickt werden.
@@ -414,6 +414,46 @@ class ProxmoxNode extends IPSModule
         foreach ($gaeste as $g) { $v = (int) ($g['vmid'] ?? 0); if ($v > 0) { $vmids[] = $v; } }
         sort($vmids);
         $this->schreib($ziel, 'Gäste VMIDs', 3, '', implode(',', $vmids));
+
+        /* Verwaiste Gaeste: Teilbaeume, zu denen es am Knoten keinen Gast mehr gibt.
+         *
+         * Wird ein Gast in Proxmox geloescht, verschwindet er aus /cluster/resources -
+         * sein Unterbaum in Symcon aber bleibt stehen und wird einfach nicht mehr
+         * beschrieben. Nichts schlaegt an: die Instanz ist weiter auf Status 102, die
+         * Abfrage laeuft fehlerfrei, im Meldungslog steht nichts. Die Variablen frieren
+         * still ein und ihre Archivreihen wachsen nicht mehr - gefunden am 19.09.2026
+         * mit sechs Gaesten und 114 Variablen auf einem Knoten, die seit Stunden
+         * unbemerkt standen.
+         *
+         * Gezaehlt wird, NICHT geloescht. Die Reihen koennen Jahre zurueckreichen (hier
+         * zwei mit 971 Tagen), und was davon aufzuheben ist, weiss nur ein Mensch -
+         * dieselbe Zurueckhaltung wie bei der Archivpflege im Lagebild.
+         *
+         * "Verwaist" heisst NICHT "geloescht". Ein Gast kann auch auf einen anderen
+         * Knoten UMGEZOGEN sein - gleich beim ersten Lauf trat genau das auf (ein
+         * move_volume von zwoelf Minuten auf einen anderen Knoten). Die Meldung sagt
+         * deshalb beides; wer den Teilbaum wegwirft, ohne nachzusehen, verliert die
+         * Historie eines Gastes, den es noch gibt. */
+        $verwaist = [];
+        foreach (IPS_GetChildrenIDs($ziel) as $kind) {
+            if (IPS_GetObject($kind)['ObjectType'] !== 1) { continue; }   // nur Gast-Teilbaeume
+            $gid = 0;
+            foreach (IPS_GetChildrenIDs($kind) as $v) {
+                if (IPS_VariableExists($v) && IPS_GetName($v) === 'id') { $gid = (int) GetValue($v); break; }
+            }
+            if ($gid > 0 && !in_array($gid, $vmids, true)) {
+                $verwaist[] = IPS_GetName($kind) . ' (' . $gid . ')';
+            }
+        }
+        sort($verwaist);
+        $vorher = (int) $this->lies($ziel, 'Verwaiste Gäste');
+        $this->schreib($ziel, 'Verwaiste Gäste', 1, '', count($verwaist));
+        $this->schreib($ziel, 'Verwaiste Gäste (Namen)', 3, '', implode(', ', $verwaist));
+        if (count($verwaist) !== $vorher) {
+            $this->LogMessage(count($verwaist) > 0
+                ? ('Verwaiste Gaeste: ' . implode(', ', $verwaist) . ' - nicht mehr auf diesem Knoten (geloescht ODER verschoben), Teilbaum steht noch')
+                : 'Keine verwaisten Gaeste mehr', KL_MESSAGE);
+        }
         $this->schreib($ziel, 'Gäste gesamt',   1, '', count($gaeste));
         $this->schreib($ziel, 'Gäste laufen',   1, '', $laufen);
         $this->schreib($ziel, 'Gäste gestoppt', 1, '', count($gaeste) - $laufen);
@@ -528,6 +568,15 @@ class ProxmoxNode extends IPSModule
         if ($sek < 0) { $sek = 0; }
         if ($sek < 3600) { return sprintf('%d:%02d', intdiv($sek, 60), $sek % 60); }
         return sprintf('%d:%02d', intdiv($sek, 3600), intdiv($sek % 3600, 60));
+    }
+
+    /** Aktuellen Wert einer Variablen unter $eltern lesen; null, wenn es sie nicht gibt. */
+    private function lies(int $eltern, string $name)
+    {
+        foreach (IPS_GetChildrenIDs($eltern) as $c) {
+            if (IPS_VariableExists($c) && IPS_GetName($c) === $name) { return GetValue($c); }
+        }
+        return null;
     }
 
     private function schreib(int $eltern, string $name, int $typ, string $profil, $wert): void
